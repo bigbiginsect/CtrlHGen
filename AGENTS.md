@@ -1,8 +1,12 @@
 # CtrlHGen Working Notes
 
-This file applies to the whole repository. It only records the local/DSW
-working setup. It does not define research goals, priorities, or a roadmap; the
-current user request defines the task.
+CtrlHGen is the official implementation of "Controllable Logical Hypothesis
+Generation for Abductive Reasoning in Knowledge Graphs". This private repository
+is the working copy of the authors' open-source code. The paper is available at
+`paper/Controllable_Logical_Hypothesis_Generation.pdf`.
+
+This file applies to the whole repository and records the local/DSW working
+setup. The current user request defines the task at hand.
 
 ## Source of truth
 
@@ -14,9 +18,6 @@ current user request defines the task.
 Edit code locally. Commit and push it to `origin`, then make DSW use that exact
 commit SHA. Do not keep separate manual edits on the local and DSW checkouts,
 and never push to `upstream`.
-
-Branch strategy follows the current user request. Do not create a branch merely
-because this file says so.
 
 ## Normal local-to-DSW workflow
 
