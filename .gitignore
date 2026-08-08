@@ -1,0 +1,55 @@
+# Python bytecode and native extensions
+__pycache__/
+*.py[cod]
+*.so
+
+# Python environments and tooling caches
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+
+# Editors, notebooks, and operating systems
+.idea/
+.vscode/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# Downloaded datasets and generated experiment artifacts
+sampled_data/*
+!sampled_data/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+results/*
+!results/.gitkeep
+runs/*
+!runs/.gitkeep
+outputs/
+logs/
+wandb/
+
+# Generated caches and model artifacts
+.cache/
+*.log
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+dataloader.pt
+graph_samplers.pt
+
+# Temporary files
+*.tmp
+*.swp
+*~
