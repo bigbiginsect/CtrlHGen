@@ -23,6 +23,8 @@ def test_grpo_config_pins_paper_group_and_disables_external_reporting(tmp_path):
     assert result.eval_strategy.value == "no"
     assert result.report_to == []
     assert result.max_steps == 1
+    assert result.save_steps == 1
+    assert result.save_total_limit == 2
 
 
 def test_named_reward_functions_return_python_floats_and_persist_means(monkeypatch, tmp_path):

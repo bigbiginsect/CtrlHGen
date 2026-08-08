@@ -196,6 +196,7 @@ def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: in
         report_to=[],
         save_strategy="steps",
         save_steps=int(save_steps),
+        save_total_limit=2,
     )
 
 
