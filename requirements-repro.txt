@@ -1,0 +1,23 @@
+# CtrlHGen WN18RR reproduction dependencies for Python 3.11.
+#
+# Install PyTorch 2.6.0 for CUDA 12.4 from the official PyTorch index first;
+# see README.md.  PyTorch is deliberately not repeated here so that pip does
+# not replace the CUDA build with a wheel from another index.
+accelerate==1.5.2
+datasets==3.5.0
+networkx==3.2.1
+nltk==3.9.1
+numpy==1.26.3
+pandas==2.2.3
+pykeen==1.11.0
+PyYAML==6.0.2
+safetensors==0.5.3
+smatch==1.0.4
+tokenizers==0.21.1
+transformers==4.50.2
+trl==0.16.0
+tqdm==4.67.1
+wandb==0.19.8
+
+# Phase A verification
+pytest==8.3.5

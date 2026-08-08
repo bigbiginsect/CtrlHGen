@@ -1,237 +1,394 @@
+"""Knowledge-graph loading with reproducible splits and cache manifests.
+
+The legacy project rebuilt a random split before it checked its pickle cache.
+This module keeps the old ``load_kg(name)`` call working, while the reproduction
+pipeline supplies a seed, data root, and semantic config hash and therefore gets
+an isolated, verifiable cache.
+"""
+
+from __future__ import annotations
+
 import argparse
-
-import pandas as pd
 import csv
-import os
+import hashlib
+import json
+from pathlib import Path
 import pickle
-import pykeen.datasets as pk_datasets
-import pykeen.utils as pk_utils
-import torch
-# import datasets as hg_datasets
+from typing import Any, Iterable, Mapping, Sequence
 
-import networkx as nx
+import numpy as np
+import pandas as pd
+
 from akgr.utils.nx_util import df_to_graph
+from akgr.kgdata.kgclass import KG
 
-def df_concat(df_list: list):
-    return pd.concat(df_list, ignore_index=True)
 
-def update_inverse_edges(rel_id2name: dict, raw_df: pd.DataFrame):
-    """
-    Input: the rel_id2name map and the single-direction data raw_df
+TRIPLE_COLUMNS = ["head_id", "tail_id", "relation_id"]
+CANONICAL_COLUMNS = ["head_id", "relation_id", "tail_id"]
+KG_MANIFEST_SCHEMA = 1
 
-    Process: For each split, create inverse edges for existing edges. New
-        edges and original edges are copied into a separate dataframe. The
-        relation id maps are updated accordingly.
 
-    Output: new rel_id2name map, rel_id2inv map, and the new data new_df.
-    """
-    new_id2name = {}
-    rel_id2inv  = {}
-    for id, name in rel_id2name.items():
-        new_id2name[id * 2] = f'+{name}'
-        new_id2name[id * 2 + 1] = f'-{name}'
-        rel_id2inv[id * 2] = id * 2 + 1
-        rel_id2inv[id * 2 + 1] = id * 2
-    new_df = {}
-    for split, df in raw_df.items():
-        df_inv = pd.DataFrame(data=df, copy=True)
-        # inverse edges
-        df_inv.loc[:, ['head_id', 'tail_id']] = (df_inv.loc[:, ['tail_id', 'head_id']].values)
-        # reindex rel id
-        df['relation_id'] = df['relation_id'].apply(lambda x: x * 2)
-        df_inv['relation_id'] = df_inv['relation_id'].apply(lambda x: x * 2 + 1)
-        df_all = df_concat([df, df_inv])
-        new_df[split] = df_all.sort_values(by=['relation_id'])
-    return new_id2name, rel_id2inv, new_df
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-def dump_kg(kg,output_path):
-    with open(output_path,'wb') as f:
-        kg = pickle.dump(kg,f)
-        print(f"# KG saved to {output_path}")
-    return kg
-        
-def load_kg_from_disk(input_path):
 
-    with open(input_path,'rb') as f:
-        kg = pickle.load(f)
-        print(f"# KG loaded from {input_path}")
-        return kg
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
-def load_kg_common(dataname: str, reverse_edges_flag: bool, id_map_only: bool):
-    """
-    :param dataname:
-    :return: a dict, see return
-    """
-    # https://pykeen.readthedocs.io/en/stable/reference/datasets.html
-    # No matter whether reverse_edges_flag is True or not, we load single-direction data first and reallocate splits.
-    if dataname == 'YAGO310':
-        ds = pk_datasets.YAGO310(create_inverse_triples=False)
-    elif dataname == 'FB15k-237':
-        ds = pk_datasets.FB15k237(create_inverse_triples=False)
-    elif dataname == 'DBpedia50':
-        ds = pk_datasets.DBpedia50(create_inverse_triples=False)
-    elif dataname == 'BioKG':
-        ds =  pk_datasets.BioKG(create_inverse_triples=False)
-    elif dataname == 'PharmKG8k':
-        ds = pk_datasets.PharmKG8k(create_inverse_triples=False)
-    elif dataname == 'WN18RR':
-        ds = pk_datasets.WN18RR(create_inverse_triples=False)
-    elif dataname == 'OGBWikiKG2':
-        ds = pk_datasets.OGBWikiKG2(create_inverse_triples=False)
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def canonicalize_triples(triples: pd.DataFrame | Iterable[Sequence[int]]) -> pd.DataFrame:
+    """Return integer triples in a canonical, input-order-independent order."""
+    if isinstance(triples, pd.DataFrame):
+        missing = set(TRIPLE_COLUMNS) - set(triples.columns)
+        if missing:
+            raise ValueError(f"Triple frame is missing columns: {sorted(missing)}")
+        frame = triples.loc[:, TRIPLE_COLUMNS].copy()
     else:
-        print(f'# Dataset "{dataname}" not supported, return None')
-        return None
-    # https://pykeen.readthedocs.io/en/latest/api/pykeen.datasets.Dataset.html#pykeen.datasets.Dataset
-    # print('# summarize()')
-    # print(ds.summarize())
-    # print('#' + '=' * 50)
+        frame = pd.DataFrame(list(triples), columns=TRIPLE_COLUMNS)
+    for column in TRIPLE_COLUMNS:
+        frame[column] = frame[column].astype("int64")
+    return frame.sort_values(CANONICAL_COLUMNS, kind="mergesort").reset_index(drop=True)
 
-    # https://pykeen.readthedocs.io/en/latest/api/pykeen.datasets.Dataset.html#pykeen.datasets.Dataset
-    num_ent = ds.num_entities
-    num_rel = ds.num_relations
 
-    # https://pykeen.readthedocs.io/en/latest/_modules/pykeen/utils.html#invert_mapping
-    ent_id2name = pk_utils.invert_mapping(ds.entity_to_id)
-    rel_id2name = pk_utils.invert_mapping(ds.relation_to_id)
-    rel_id2inv = {}
+def triples_hash(triples: pd.DataFrame) -> str:
+    rows = canonicalize_triples(triples)[CANONICAL_COLUMNS].values.tolist()
+    return _sha256_bytes(_canonical_json(rows))
 
-    print('# During loading raw kg:')
-    raw_df = {}
-    # https://pykeen.readthedocs.io/en/latest/reference/triples.html#pykeen.triples.TriplesFactory
-    for split in ['training', 'validation', 'testing']:
-        # print(f'# Split: {split}')
-        if id_map_only == True: continue
-        # https://pykeen.readthedocs.io/en/latest/reference/triples.html#pykeen.triples.TriplesFactory
-        # print(f'# loading .factory_dict[{split}]')
-        factory = ds.factory_dict[split]
-        # print(factory)
-        # https://pykeen.readthedocs.io/en/latest/reference/triples.html#pykeen.triples.CoreTriplesFactory
-        # print('# loading .mapped_triples')
-        mapped_triples = factory.mapped_triples
-        # print(f'# Split shape of pykeen:', mapped_triples.shape)
 
-        # https://pykeen.readthedocs.io/en/latest/reference/triples.html#pykeen.triples.CoreTriplesFactory.get_inverse_relation_id
-        # https://pykeen.readthedocs.io/en/latest/reference/triples.html#pykeen.triples.TriplesFactory.tensor_to_df
-        # print('# convertning tensor to df')
-        # select (u, v, k) columns
-        triples_df = factory.tensor_to_df(mapped_triples)[['head_id', 'tail_id', 'relation_id']]
-        raw_df[split] = triples_df
-        # print('#' + '=' * 50)
+def mapping_hash(mapping: Mapping[int, Any]) -> str:
+    normalized = {str(int(key)): str(value) for key, value in mapping.items()}
+    return _sha256_bytes(_canonical_json(normalized))
 
-    # Merge all splits
-    raw_df_all = df_concat([raw_df['training'], raw_df['validation'], raw_df['testing']])
-    # Reallocate splits
-    raw_df['training'] = raw_df_all.sample(frac=0.8, replace=False)
-    raw_df_remaining = raw_df_all.drop(raw_df['training'].index)
-    raw_df['validation'] = raw_df_remaining.sample(frac=0.5, replace=False)
-    raw_df['testing'] = raw_df_remaining.drop(raw_df['validation'].index)
 
-    if reverse_edges_flag == True:
-        rel_id2name, rel_id2inv, raw_df = update_inverse_edges(rel_id2name, raw_df)
-        num_rel *= 2
-
-    print('# Sizes after adding inverse edges')
-    print(raw_df['training'].shape)
-    print(raw_df['validation'].shape)
-    print(raw_df['testing'].shape)
-
-    if id_map_only == True:
-        return {
-            'ent_id2name': ent_id2name,
-            'rel_id2name': rel_id2name
-        }
-    # creating graphs
-    our_df = {
-        'train': raw_df['training'],
-        'valid': df_concat([raw_df['training'], raw_df['validation']]),
-        'test': df_concat([raw_df['training'], raw_df['validation'], raw_df['testing']]),
-        'test_only': raw_df['testing']
+def split_triples(
+    triples: pd.DataFrame | Iterable[Sequence[int]],
+    seed: int,
+    ratios: Sequence[float] = (0.8, 0.1, 0.1),
+) -> dict[str, pd.DataFrame]:
+    """Canonically shuffle and split triples into exclusive train/valid/test."""
+    ratios = tuple(float(value) for value in ratios)
+    if len(ratios) != 3 or not np.isclose(sum(ratios), 1.0):
+        raise ValueError("split ratios must contain three values summing to 1")
+    frame = canonicalize_triples(triples)
+    permutation = np.random.default_rng(int(seed)).permutation(len(frame))
+    n_train = int(len(frame) * ratios[0])
+    n_valid = int(len(frame) * ratios[1])
+    boundaries = (n_train, n_train + n_valid)
+    indices = {
+        "train": permutation[: boundaries[0]],
+        "valid": permutation[boundaries[0] : boundaries[1]],
+        "test": permutation[boundaries[1] :],
     }
-    graphs = {}
-    for split, df in our_df.items():
-        graphs[split] = df_to_graph(df)
-
-    print('# Checking id ranges (in graphs)')
-    print(f'ent id: {min(ent_id2name.keys()), max(ent_id2name.keys())}')
-    print(f'rel id: {min(rel_id2name.keys()), max(rel_id2name.keys())}')
     return {
-        'num_ent': num_ent,
-        'num_rel': num_rel,
-        'ent_id2name': ent_id2name,
-        'rel_id2name': rel_id2name,
-        'rel_id2inv': rel_id2inv,
-        'graphs': graphs
+        split: canonicalize_triples(frame.iloc[split_indices])
+        for split, split_indices in indices.items()
     }
 
-def load_fb15k237_ent_2idname(ent_id2name):
-    mid2name_path = 'akgr/metadata/FB15k_mid2name.txt'
-    if os.path.exists(mid2name_path) == False:
-        print(f'# Error: {mid2name_path} does not exist')
-    mid2name = {}
-    with open(mid2name_path, 'r', encoding='utf-8') as f:
-        rows = csv.reader(f, delimiter='\t')
-        for row in rows:
-            mid, name = row
-            mid2name[mid] = name
-    for id, name in ent_id2name.items():
-        ent_id2name[id] = mid2name[name]
-    # print(ent_id2name)
-    return ent_id2name
-    # https://huggingface.co/datasets/KGraph/FB15k-237/resolve/main/data/FB15k_mid2name.txt
 
-def load_wn18rr_ent_id2name(ent_id2name):
-    # https://stackoverflow.com/questions/8077641/how-to-get-the-wordnet-synset-given-an-offset-id
-    import nltk
-    nltk.download('wordnet')
-    from nltk.corpus import wordnet
-    for id, name in ent_id2name.items():
-        ent_id2name[id] = wordnet.synset_from_pos_and_offset('n',int(name))
-    return ent_id2name
+def update_inverse_edges(
+    rel_id2name: Mapping[int, Any], exclusive: Mapping[str, pd.DataFrame]
+) -> tuple[dict[int, str], dict[int, int], dict[str, pd.DataFrame]]:
+    """Add inverse edges after splitting, preserving split exclusivity."""
+    new_id2name: dict[int, str] = {}
+    rel_id2inv: dict[int, int] = {}
+    for relation_id, name in sorted(rel_id2name.items()):
+        forward, reverse = int(relation_id) * 2, int(relation_id) * 2 + 1
+        new_id2name[forward] = f"+{name}"
+        new_id2name[reverse] = f"-{name}"
+        rel_id2inv[forward] = reverse
+        rel_id2inv[reverse] = forward
 
-from akgr.kgdata.kgclass import GraphSampler, KG
-def load_kg(dataname, reverse_edges_flag=True, id_map_only=False):
-    print(f'# loading {dataname}')
-    raw_kg_dict = load_kg_common(
-        dataname,
-        reverse_edges_flag=reverse_edges_flag,
-        id_map_only=id_map_only
-    )
-    if raw_kg_dict == None: return None
+    expanded: dict[str, pd.DataFrame] = {}
+    for split, source in exclusive.items():
+        forward = canonicalize_triples(source)
+        forward["relation_id"] = forward["relation_id"] * 2
+        reverse = source.rename(columns={"head_id": "tail_id", "tail_id": "head_id"})[
+            TRIPLE_COLUMNS
+        ].copy()
+        reverse["relation_id"] = reverse["relation_id"] * 2 + 1
+        expanded[split] = canonicalize_triples(pd.concat([forward, reverse], ignore_index=True))
+    return new_id2name, rel_id2inv, expanded
 
-    if dataname == 'FB15k-237':
-        # tweak mid2name
-        raw_kg_dict['ent_id2name'] = load_fb15k237_ent_2idname(raw_kg_dict['ent_id2name'])
-    elif dataname == 'WN18RR':
-        raw_kg_dict['ent_id2name'] = load_wn18rr_ent_id2name(raw_kg_dict['ent_id2name'])
-    
-    path = f'./sampled_data/{dataname}/{dataname}.pkl'
-    if os.path.exists(path):
-        kg =load_kg_from_disk(path)
-        
+
+def _cumulative_frames(exclusive: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return {
+        "train": canonicalize_triples(exclusive["train"]),
+        "valid": canonicalize_triples(pd.concat([exclusive["train"], exclusive["valid"]], ignore_index=True)),
+        "test": canonicalize_triples(
+            pd.concat([exclusive["train"], exclusive["valid"], exclusive["test"]], ignore_index=True)
+        ),
+    }
+
+
+def build_kg_from_triples(
+    triples: pd.DataFrame | Iterable[Sequence[int]],
+    *,
+    num_ent: int,
+    rel_id2name: Mapping[int, Any],
+    ent_id2name: Mapping[int, Any] | None = None,
+    seed: int = 42,
+    split_ratios: Sequence[float] = (0.8, 0.1, 0.1),
+    reverse_edges_flag: bool = True,
+) -> tuple[KG, dict[str, Any]]:
+    """Pure synthetic-friendly KG builder used by the loader and tests."""
+    raw = canonicalize_triples(triples)
+    exclusive = split_triples(raw, seed, split_ratios)
+    original_relations = {int(key): str(value) for key, value in rel_id2name.items()}
+    if reverse_edges_flag:
+        final_relations, rel_id2inv, graph_exclusive = update_inverse_edges(original_relations, exclusive)
     else:
-        kg = KG(
-        num_ent=raw_kg_dict['num_ent'],
-        num_rel=raw_kg_dict['num_rel'],
-        ent_id2name=raw_kg_dict['ent_id2name'],
-        rel_id2name=raw_kg_dict['rel_id2name'],
-        rel_id2inv=raw_kg_dict['rel_id2inv'],
-        graphs=raw_kg_dict['graphs']
+        final_relations = original_relations
+        rel_id2inv = {}
+        graph_exclusive = {split: canonicalize_triples(frame) for split, frame in exclusive.items()}
+    cumulative = _cumulative_frames(graph_exclusive)
+    graphs = {split: df_to_graph(frame[TRIPLE_COLUMNS]) for split, frame in cumulative.items()}
+    kg = KG(
+        num_ent=int(num_ent),
+        num_rel=len(final_relations),
+        ent_id2name=dict(ent_id2name or {index: str(index) for index in range(int(num_ent))}),
+        rel_id2name=final_relations,
+        rel_id2inv=rel_id2inv,
+        graphs=graphs,
     )
-        dump_kg(kg, path)
-  
-    
+    metadata = {
+        "raw": {"count": len(raw), "sha256": triples_hash(raw)},
+        "exclusive_splits": {
+            split: {"count": len(frame), "sha256": triples_hash(frame)}
+            for split, frame in exclusive.items()
+        },
+        "cumulative_graphs": {
+            split: {"count": len(frame), "sha256": triples_hash(frame)}
+            for split, frame in cumulative.items()
+        },
+        "entity_mapping_sha256": mapping_hash(kg.ent_id2name),
+        "relation_mapping_sha256": mapping_hash(kg.rel_id2name),
+    }
+    return kg, metadata
+
+
+def _dataset_class(dataname: str):
+    import pykeen.datasets as datasets
+
+    supported = {
+        "YAGO310": datasets.YAGO310,
+        "FB15k-237": datasets.FB15k237,
+        "DBpedia50": datasets.DBpedia50,
+        "BioKG": datasets.BioKG,
+        "PharmKG8k": datasets.PharmKG8k,
+        "WN18RR": datasets.WN18RR,
+        "OGBWikiKG2": datasets.OGBWikiKG2,
+    }
+    try:
+        return supported[dataname]
+    except KeyError as exc:
+        raise ValueError(f"Dataset {dataname!r} is not supported") from exc
+
+
+def _load_raw_dataset(dataname: str) -> tuple[Any, str, pd.DataFrame, dict[int, Any], dict[int, Any]]:
+    import pykeen
+    import pykeen.utils as pk_utils
+
+    dataset = _dataset_class(dataname)(create_inverse_triples=False)
+    frames = []
+    for split in ("training", "validation", "testing"):
+        factory = dataset.factory_dict[split]
+        frame = factory.tensor_to_df(factory.mapped_triples)[TRIPLE_COLUMNS]
+        frames.append(frame)
+    raw = canonicalize_triples(pd.concat(frames, ignore_index=True))
+    entities = pk_utils.invert_mapping(dataset.entity_to_id)
+    relations = pk_utils.invert_mapping(dataset.relation_to_id)
+    return pykeen, type(dataset).__name__, raw, entities, relations
+
+
+def _cache_paths(
+    data_root: Path,
+    dataname: str,
+    seed: int | None,
+    reverse_edges_flag: bool,
+    split_ratios: Sequence[float],
+    semantic_hash: str | None,
+) -> tuple[Path, Path]:
+    directory = data_root / dataname
+    directory.mkdir(parents=True, exist_ok=True)
+    if seed is None and semantic_hash is None:
+        stem = dataname
+    else:
+        request = {
+            "dataset": dataname,
+            "seed": int(seed if seed is not None else 0),
+            "reverse_edges": bool(reverse_edges_flag),
+            "split_ratios": [float(value) for value in split_ratios],
+            "semantic_hash": semantic_hash,
+        }
+        stem = f"{dataname}-kg-{_sha256_bytes(_canonical_json(request))[:16]}"
+    return directory / f"{stem}.pkl", directory / f"{stem}.manifest.json"
+
+
+def _request_matches(
+    manifest: Mapping[str, Any],
+    *,
+    dataname: str,
+    seed: int | None,
+    reverse_edges_flag: bool,
+    split_ratios: Sequence[float],
+    semantic_hash: str | None,
+) -> bool:
+    return (
+        manifest.get("schema_version") == KG_MANIFEST_SCHEMA
+        and manifest.get("dataset") == dataname
+        and manifest.get("seed") == (int(seed) if seed is not None else None)
+        and manifest.get("reverse_edges") is bool(reverse_edges_flag)
+        and manifest.get("split_ratios") == [float(value) for value in split_ratios]
+        and manifest.get("semantic_hash") == semantic_hash
+    )
+
+
+def _read_cache(cache_path: Path, manifest_path: Path, request: Mapping[str, Any]) -> KG | None:
+    cache_exists = cache_path.exists()
+    manifest_exists = manifest_path.exists()
+    if not cache_exists and not manifest_exists:
+        return None
+    if cache_exists != manifest_exists:
+        raise ValueError(
+            f"Incomplete KG cache pair; cache={cache_exists}, manifest={manifest_exists}: "
+            f"{cache_path}, {manifest_path}"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not _request_matches(manifest, **request):
+        raise ValueError(f"KG cache manifest does not match the requested configuration: {manifest_path}")
+    if manifest.get("cache", {}).get("sha256") != sha256_file(cache_path):
+        raise ValueError(f"KG cache checksum mismatch: {cache_path}")
+    with cache_path.open("rb") as handle:
+        kg = pickle.load(handle)
+    kg.cache_path = cache_path
+    kg.cache_manifest_path = manifest_path
+    kg.cache_manifest = manifest
     return kg
+
+
+def load_kg(
+    dataname: str,
+    reverse_edges_flag: bool = True,
+    id_map_only: bool = False,
+    *,
+    data_root: str | Path = "./sampled_data",
+    seed: int | None = None,
+    split_ratios: Sequence[float] = (0.8, 0.1, 0.1),
+    semantic_hash: str | None = None,
+    offline: bool = False,
+) -> KG | dict[str, dict[int, Any]]:
+    """Load a KG cache first, or build one from PyKEEN with a fixed split.
+
+    ``offline=True`` never instantiates a PyKEEN dataset. It therefore succeeds
+    only when the exact requested cache and manifest already exist.
+    """
+    root = Path(data_root).expanduser().resolve()
+    cache_path, manifest_path = _cache_paths(
+        root, dataname, seed, reverse_edges_flag, split_ratios, semantic_hash
+    )
+    request = {
+        "dataname": dataname,
+        "seed": seed,
+        "reverse_edges_flag": reverse_edges_flag,
+        "split_ratios": split_ratios,
+        "semantic_hash": semantic_hash,
+    }
+    if not id_map_only:
+        cached = _read_cache(cache_path, manifest_path, request)
+        if cached is not None:
+            print(f"# KG loaded from {cache_path}")
+            return cached
+    if offline:
+        raise FileNotFoundError(f"No valid offline KG cache for request: {manifest_path}")
+
+    pykeen, dataset_class_name, raw, entities, relations = _load_raw_dataset(dataname)
+    if id_map_only:
+        return {"ent_id2name": entities, "rel_id2name": relations}
+    effective_seed = int(seed) if seed is not None else int(np.random.SeedSequence().entropy)
+    kg, metadata = build_kg_from_triples(
+        raw,
+        num_ent=len(entities),
+        rel_id2name=relations,
+        ent_id2name=entities,
+        seed=effective_seed,
+        split_ratios=split_ratios,
+        reverse_edges_flag=reverse_edges_flag,
+    )
+    with cache_path.open("wb") as handle:
+        pickle.dump(kg, handle)
+    manifest = {
+        "schema_version": KG_MANIFEST_SCHEMA,
+        "dataset": dataname,
+        "dataset_class": dataset_class_name,
+        "pykeen_version": pykeen.__version__,
+        "source": {
+            "provider": "pykeen",
+            "dataset": dataname,
+            "dataset_class": dataset_class_name,
+            "pykeen_version": pykeen.__version__,
+        },
+        "seed": int(seed) if seed is not None else None,
+        "effective_seed": effective_seed,
+        "split_ratios": [float(value) for value in split_ratios],
+        "reverse_edges": bool(reverse_edges_flag),
+        "split": {
+            "algorithm": "canonical-sort+numpy-default-rng-permutation-v1",
+            "seed": int(seed) if seed is not None else None,
+            "effective_seed": effective_seed,
+            "ratios": [float(value) for value in split_ratios],
+        },
+        "inverse_edges": {
+            "enabled": bool(reverse_edges_flag),
+            "applied_after_exclusive_split": True,
+        },
+        "semantic_hash": semantic_hash,
+        "stats": {"nentity": kg.num_ent, "nrelation": kg.num_rel},
+        **metadata,
+        "mappings": {
+            "entity": {
+                "count": len(kg.ent_id2name),
+                "sha256": metadata["entity_mapping_sha256"],
+            },
+            "relation": {
+                "count": len(kg.rel_id2name),
+                "sha256": metadata["relation_mapping_sha256"],
+            },
+        },
+        "cache": {"path": cache_path.name, "sha256": sha256_file(cache_path)},
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    kg.cache_path = cache_path
+    kg.cache_manifest_path = manifest_path
+    kg.cache_manifest = manifest
+    print(f"# KG saved to {cache_path}")
+    return kg
+
+
+def load_fb15k237_ent_2idname(ent_id2name: Mapping[int, str]) -> dict[int, str]:
+    """Legacy optional label helper; sampling no longer calls it eagerly."""
+    path = Path("akgr/metadata/FB15k_mid2name.txt")
+    with path.open("r", encoding="utf-8") as handle:
+        mid2name = dict(csv.reader(handle, delimiter="\t"))
+    return {index: mid2name[name] for index, name in ent_id2name.items()}
 
 
 def my_parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--dataname', default='YAGO310')
-    args = parser.parse_args()
-    return args
+    parser.add_argument("-d", "--dataname", default="YAGO310")
+    parser.add_argument("--data-root", default="./sampled_data")
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--offline", action="store_true")
+    return parser.parse_args()
 
-def debug():
+
+if __name__ == "__main__":
     args = my_parse_args()
-    load_kg(args.dataname)
-
-if __name__ == '__main__':
-    debug()
+    load_kg(args.dataname, data_root=args.data_root, seed=args.seed, offline=args.offline)

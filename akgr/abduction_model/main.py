@@ -11,8 +11,16 @@ import random
 
 # dataloader
 from akgr.dataloader import new_create_dataloader, new_create_dataset
-from akgr.tokenizer import create_tokenizer, new_extract_sample_to_device,new_extract_sample_to_device_pattern, new_extract_sample_to_device_number_relation, new_extract_sample_to_device_number_entity\
-,new_extract_sample_to_device_specific_entity,new_extract_sample_to_device_specific_relation
+from akgr.tokenizer import (
+    create_tokenizer,
+    prepare_batch,
+    new_extract_sample_to_device,
+    new_extract_sample_to_device_pattern,
+    new_extract_sample_to_device_number_relation,
+    new_extract_sample_to_device_number_entity,
+    new_extract_sample_to_device_specific_entity,
+    new_extract_sample_to_device_specific_relation,
+)
 
 # transformer (huggingface)
 from akgr.abduction_model.transformer import create_transformer
@@ -64,25 +72,12 @@ def train_loop(args, dataloader, model, tokenizer, optimizer, scheduler, model_n
     total_loss = 0
 
     for iter, sample in (pbar := tqdm(enumerate(dataloader), total=niter)):
-        # a list of tensors
-        if args.condition == 'unconditional':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask = \
-            new_extract_sample_to_device(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-        elif args.condition == 'pattern':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-            new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-        elif args.condition == 'relationnumber':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-            new_extract_sample_to_device_number_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, False) 
-        elif args.condition == 'entitynumber':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-            new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-        elif args.condition == 'relation':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-            new_extract_sample_to_device_specific_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-        elif args.condition == 'entity':
-            source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-            new_extract_sample_to_device_specific_entity(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
+        prepared = prepare_batch(
+            device, sample, tokenizer, is_gpt, src_len, tgt_len, False, args.condition
+        )
+        source, target, pattern_id = prepared.source, prepared.target, prepared.pattern_id
+        input_ids, attention_mask, labels = prepared.input_ids, prepared.attention_mask, prepared.labels
+        source_attention_mask = prepared.source_attention_mask
 
         optimizer.zero_grad()
        
@@ -132,24 +127,12 @@ def valid_loop(args, dataloader, model, tokenizer, graph_samplers,
 
     with torch.no_grad():
         for iter, sample in (pbar := tqdm(enumerate(dataloader, start=1), total=niter)):
-            if args.condition == 'unconditional':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask = \
-                new_extract_sample_to_device(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-            elif args.condition == 'pattern':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-            elif args.condition == 'relationnumber':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_number_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, False) 
-            elif args.condition == 'entitynumber':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-            elif args.condition == 'relation':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_specific_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
-            elif args.condition == 'entity':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_specific_entity(device, sample, tokenizer, is_gpt, src_len, tgt_len, False)
+            prepared = prepare_batch(
+                device, sample, tokenizer, is_gpt, src_len, tgt_len, False, args.condition
+            )
+            source, target, pattern_id = prepared.source, prepared.target, prepared.pattern_id
+            input_ids, attention_mask, labels = prepared.input_ids, prepared.attention_mask, prepared.labels
+            source_attention_mask = prepared.source_attention_mask
 
             # print('src, tgt shapes:', src.shape, tgt.shape)
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
@@ -371,24 +354,13 @@ def test_loop(args, dataloader, model, tokenizer, graph_samplers, searching_spli
         for iter, sample in (pbar := tqdm(enumerate(dataloader, start=1),
                                           total=niter, disable=(accelerator is not None) and (not accelerator.is_local_main_process))):
             # gathered_sample = accelerator.gather_for_metrics(sample) if accelerator is not None else sample
-            if args.condition == 'unconditional':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask = \
-                new_extract_sample_to_device(device, sample, tokenizer, is_gpt, src_len, tgt_len, True)
-            elif args.condition == 'pattern':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, True)
-            elif args.condition == 'relationnumber':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_number_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, True) 
-            elif args.condition == 'entitynumber':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt, src_len, tgt_len, True)
-            elif args.condition == 'relation':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_specific_relation(device, sample, tokenizer, is_gpt, src_len, tgt_len, True)
-            elif args.condition == 'entity':
-                source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, condition = \
-                new_extract_sample_to_device_specific_entity(device, sample, tokenizer, is_gpt, src_len, tgt_len, True)
+            prepared = prepare_batch(
+                device, sample, tokenizer, is_gpt, src_len, tgt_len, True, args.condition
+            )
+            source, target, pattern_id = prepared.source, prepared.target, prepared.pattern_id
+            input_ids, attention_mask, labels = prepared.input_ids, prepared.attention_mask, prepared.labels
+            source_attention_mask = prepared.source_attention_mask
+            condition = None if prepared.conditions is None else [item.value for item in prepared.conditions]
 
             pred = constrained_inference(args,
                 model if accelerator is None else accelerator.unwrap_model(model),
@@ -418,22 +390,28 @@ def test_loop(args, dataloader, model, tokenizer, graph_samplers, searching_spli
             print('pred_de')
             print(pred_decoded[:5])
 
-            scoring_fn = scoring_input_act_batch_condition if is_act else scoring_input_wordlist_batch
+            scoring_fn = (
+                scoring_input_act_batch_condition
+                if is_act and condition is not None
+                else scoring_input_act_batch if is_act else scoring_input_wordlist_batch
+            )
             if args.condition ==  'relation' or args.condition == 'entity':
                 scoring_method=['smatch', 'precrecf1', 'jaccard','dice','overlap','tanimoto','validity','specific'] + ['count0'] * (args.test_count0 == True)
             else:
                 scoring_method=['smatch', 'precrecf1', 'jaccard','dice','overlap','tanimoto','validity'] + ['count0'] * (args.test_count0 == True)
-            scores, failures_batch_id = scoring_fn(
+            scoring_kwargs = dict(
                 pred_word_batch=pred_decoded,
                 label_word_batch=target,
                 ans_word_batch=source,
-                condition_batch=condition,
                 scoring_method=scoring_method,
                 do_correction=args.do_correction,
                 graph_samplers=graph_samplers,
                 searching_split=searching_split,
                 return_failures=True,
                 verbose=args.vs)
+            if condition is not None and is_act:
+                scoring_kwargs["condition_batch"] = condition
+            scores, failures_batch_id = scoring_fn(**scoring_kwargs)
             # print(scores)
             if accelerator is not None:
                 gathered_scores = [None] * accelerator.num_processes
@@ -746,8 +724,14 @@ def optimize_gpro(args, dataset, model, tokenizer, graph_sampler, batch_size,
     global cond
     cond = args.condition
     global rl_factor
-    print(eval(args.rl_factor))
-    rl_factor = eval(args.rl_factor)
+    rl_factor = yaml.safe_load(args.rl_factor)
+    if not (
+        isinstance(rl_factor, list)
+        and len(rl_factor) == 4
+        and all(isinstance(value, (int, float)) for value in rl_factor)
+    ):
+        raise ValueError('--rl_factor must be a YAML/JSON list of four numeric weights')
+    print(rl_factor)
 
     model.warnings_issued = {}
     def dummy_add_model_tags(self, tags):
@@ -849,6 +833,15 @@ def load_model_by_mode(args, device, model_name, is_gpt, config_model=None, ntok
 def my_parse_args():
     parser = argparse.ArgumentParser()
 
+    # Strict Phase A entry point.  Legacy flags below remain available when
+    # --experiment-config is omitted.
+    parser.add_argument('--experiment-config')
+    parser.add_argument('--stage', choices=['unconditional', 'conditional'])
+    parser.add_argument('--parent-checkpoint')
+    parser.add_argument('--resume-checkpoint')
+    parser.add_argument('--checkpoint')
+    parser.add_argument('--max-steps', type=int, default=-1)
+
     # Configurations
     parser.add_argument('--modelname')
     parser.add_argument('--config-dataloader', default='akgr/configs/config-dataloader.yml')
@@ -910,6 +903,26 @@ def my_parse_args():
 
 def main():
     args = my_parse_args()
+    if args.experiment_config:
+        strict_flags = {
+            '--experiment-config', '--mode', '--stage', '--parent-checkpoint',
+            '--resume-checkpoint', '--checkpoint', '--max-steps',
+        }
+        supplied_flags = {
+            token.split('=', 1)[0]
+            for token in sys.argv[1:]
+            if token.startswith('-')
+        }
+        unexpected = supplied_flags - strict_flags
+        if unexpected:
+            raise ValueError(
+                '--experiment-config cannot be combined with legacy/override flags: '
+                + ', '.join(sorted(unexpected))
+            )
+        from akgr.abduction_model.experiment_runner import run_experiment_config
+        output = run_experiment_config(args)
+        print(f"Phase A output: {output}")
+        return
     print(f'# Running main.py in {args.mode} mode with:')
     print(f'args:\n{args}\n')
 

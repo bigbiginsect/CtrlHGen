@@ -1,0 +1,361 @@
+"""Strict ``--experiment-config`` execution path for Phase A reproduction."""
+
+from __future__ import annotations
+
+from functools import partial
+import hashlib
+from pathlib import Path
+
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader
+
+from akgr.abduction_model.reproduction import (
+    configure_reproduction_logging,
+    create_grpo_trainer,
+    create_sft_optimizer_schedule,
+    sft_train_epoch,
+    train_grpo,
+)
+from akgr.abduction_model.transformer import create_reproduction_transformer
+from akgr.dataloader import create_reproduction_dataset
+from akgr.evaluation import (
+    build_evaluation_record,
+    scoring_input_act_batch,
+    scoring_input_act_batch_condition,
+    write_evaluation_jsonl,
+)
+from akgr.kgdata import load_kg
+from akgr.reproduction.config import load_experiment_config
+from akgr.reproduction.contracts import ConditionSpec
+from akgr.reproduction.seed import derive_seed, make_generator, seed_everything
+from akgr.tokenizer import (
+    build_prompt,
+    condition_value_from_target,
+    create_reproduction_tokenizer,
+    prepare_batch,
+)
+from akgr.utils.load_util import load_reproduction_checkpoint, save_reproduction_checkpoint
+
+
+def _require_cuda(stage: str) -> torch.device:
+    if not torch.cuda.is_available():
+        raise RuntimeError(f"CUDA is required for strict reproduction {stage}; CPU fallback is disabled")
+    device = torch.device("cuda:0")
+    print(f"# DEVICE: {device} ({torch.cuda.get_device_name(0)})")
+    return device
+
+
+def _datasets(config, splits):
+    patterns = pd.read_csv("akgr/metadata/pattern_filtered.csv", index_col="id")
+    return create_reproduction_dataset(
+        experiment_config=config,
+        pattern_filtered=patterns,
+        splits=splits,
+        is_act=True,
+    )
+
+
+def _loader(dataset, batch_size, seed, shuffle):
+    return DataLoader(
+        dataset,
+        batch_size=int(batch_size),
+        shuffle=shuffle,
+        drop_last=False,
+        num_workers=0,
+        generator=make_generator(seed),
+    )
+
+
+def _new_tokenizer(nentity, nrelation):
+    return create_reproduction_tokenizer(nentity, nrelation)
+
+
+def _prompt_length(config):
+    return (
+        int(config.raw["data"]["max_answers"])
+        + int(config.raw["generation"]["max_new_tokens"])
+        + 2
+    )
+
+
+def _graph_samplers(config):
+    data = config.raw["data"]
+    return load_kg(
+        config.dataset,
+        data_root=config.runtime_paths["data_root"],
+        seed=config.seed,
+        split_ratios=data["split_ratios"],
+        reverse_edges_flag=data["reverse_edges"],
+        semantic_hash=config.semantic_hash,
+        offline=True,
+    ).graph_samplers
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _model_and_tokenizer(config, nentity, nrelation, args, stage):
+    if args.resume_checkpoint:
+        loaded = load_reproduction_checkpoint(
+            args.resume_checkpoint,
+            mode="test",
+            expected_stage=stage,
+            expected_condition="unconditional" if stage == "unconditional" else config.condition,
+            expected_config_hash=config.semantic_hash,
+            expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+        )
+        return loaded.model, loaded.tokenizer, loaded
+    if args.parent_checkpoint:
+        if stage != "conditional":
+            raise ValueError("--parent-checkpoint is only valid for conditional SFT or GRPO")
+        loaded = load_reproduction_checkpoint(
+            args.parent_checkpoint,
+            mode="parent",
+            expected_stage="unconditional",
+            expected_condition="unconditional",
+            expected_config_hash=config.semantic_hash,
+            expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+        )
+        return loaded.model, loaded.tokenizer, loaded
+    tokenizer = _new_tokenizer(nentity, nrelation)
+    return create_reproduction_transformer(tokenizer, config.raw["model"]), tokenizer, None
+
+
+def run_sft(config, args) -> Path:
+    if args.stage not in {"unconditional", "conditional"}:
+        raise ValueError("SFT requires --stage unconditional or conditional")
+    if args.parent_checkpoint and args.resume_checkpoint:
+        raise ValueError("--parent-checkpoint and --resume-checkpoint are mutually exclusive")
+    if args.stage == "conditional" and not (args.parent_checkpoint or args.resume_checkpoint):
+        raise ValueError("Conditional SFT requires --parent-checkpoint or --resume-checkpoint")
+
+    dataset_dict, nentity, nrelation = _datasets(config, ["train"])
+    stage_config = config.raw["training"][args.stage]
+    dataloader = _loader(dataset_dict["train"], stage_config["micro_batch_size"], config.seed, True)
+    model, tokenizer, loaded = _model_and_tokenizer(config, nentity, nrelation, args, args.stage)
+    device = _require_cuda("SFT")
+    model.to(device)
+    schedule = create_sft_optimizer_schedule(
+        model,
+        learning_rate=stage_config["learning_rate"],
+        num_batches=len(dataloader),
+        gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
+        epochs=stage_config["epochs"],
+        warmup_epochs=stage_config["warmup_epochs"],
+    )
+    start_epoch = 0
+    inherited_global_step = 0
+    if loaded is not None:
+        inherited_global_step = int(loaded.metadata["global_step"])
+    if args.resume_checkpoint:
+        loaded = load_reproduction_checkpoint(
+            args.resume_checkpoint,
+            mode="resume",
+            model=model,
+            optimizer=schedule.optimizer,
+            scheduler=schedule.scheduler,
+            expected_stage=args.stage,
+            expected_condition="unconditional" if args.stage == "unconditional" else config.condition,
+            expected_config_hash=config.semantic_hash,
+            expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+            restore_rng=True,
+        )
+        start_epoch = int(loaded.metadata["stage_epoch"])
+
+    condition = "unconditional" if args.stage == "unconditional" else config.condition
+    global_step = inherited_global_step
+    prepare = partial(
+        prepare_batch,
+        device,
+        tokenizer=tokenizer,
+        is_gpt=True,
+        src_len=_prompt_length(config),
+        tgt_len=config.raw["generation"]["max_new_tokens"],
+        is_gen=False,
+        condition=condition,
+    )
+    final_epoch = int(stage_config["epochs"])
+    if start_epoch >= final_epoch:
+        raise ValueError(f"Checkpoint already reached configured {args.stage} epochs")
+    root = config.runtime_paths["checkpoint_root"] / config.experiment["name"]
+    data_manifest_hash = _file_sha256(config.sampling_manifest_path)
+    parent_reference = args.parent_checkpoint
+    if parent_reference is None and loaded is not None:
+        parent_reference = loaded.metadata.get("parent_checkpoint")
+    output = None
+    for stage_epoch in range(start_epoch + 1, final_epoch + 1):
+        epoch_loader = _loader(
+            dataset_dict["train"],
+            stage_config["micro_batch_size"],
+            derive_seed(config.seed, args.stage, stage_epoch),
+            True,
+        )
+        _, steps = sft_train_epoch(
+            model=model,
+            dataloader=epoch_loader,
+            prepare=prepare,
+            optimizer=schedule.optimizer,
+            scheduler=schedule.scheduler,
+            gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
+        )
+        global_step += steps
+        output = save_reproduction_checkpoint(
+            root / f"{args.stage}-epoch-{stage_epoch}",
+            model=model,
+            tokenizer=tokenizer,
+            stage=args.stage,
+            stage_epoch=stage_epoch,
+            global_step=global_step,
+            condition=condition,
+            experiment_config=config.raw,
+            experiment_config_hash=config.semantic_hash,
+            seed=config.seed,
+            parent_checkpoint=parent_reference,
+            optimizer=schedule.optimizer,
+            scheduler=schedule.scheduler,
+            data_manifest_hash=data_manifest_hash,
+        )
+    return output
+
+
+def run_evaluation(config, args) -> Path:
+    if not args.checkpoint:
+        raise ValueError("testing requires --checkpoint")
+    loaded = load_reproduction_checkpoint(
+        args.checkpoint,
+        mode="test",
+        expected_config_hash=config.semantic_hash,
+        expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+    )
+    dataset_dict, _, _ = _datasets(config, [args.test_split])
+    dataloader = _loader(dataset_dict[args.test_split], args.overwrite_batchsize or 4, config.seed, False)
+    graph_samplers = _graph_samplers(config)
+    device = _require_cuda("evaluation")
+    model, tokenizer = loaded.model.to(device), loaded.tokenizer
+    model.eval()
+    generation = config.raw["generation"]
+    records = []
+    record_index = 0
+    condition_kind = loaded.metadata["condition"]
+    with torch.no_grad():
+        for sample in dataloader:
+            batch = prepare_batch(
+                device, sample, tokenizer, True, _prompt_length(config),
+                generation["max_new_tokens"], True, condition_kind
+            )
+            generated = model.generate(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                max_new_tokens=int(generation["max_new_tokens"]),
+                do_sample=bool(generation["do_sample"]),
+                top_k=int(generation["top_k"]),
+                top_p=float(generation["top_p"]),
+                temperature=float(generation["temperature"]),
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+            predictions = tokenizer.batch_decode(
+                generated[:, batch.input_ids.shape[1]:], skip_special_tokens=True
+            )
+            methods = ["smatch", "jaccard", "dice", "overlap"]
+            if batch.conditions is None:
+                scores, _ = scoring_input_act_batch(
+                    predictions, batch.target, batch.source, methods,
+                    graph_samplers=graph_samplers, searching_split=args.test_split, return_failures=True,
+                )
+            else:
+                condition_values = [item.value for item in batch.conditions]
+                condition_method = "specific" if config.condition.startswith("specific_") else "validity"
+                scores, _ = scoring_input_act_batch_condition(
+                    predictions, batch.target, batch.source, condition_values, methods + [condition_method],
+                    graph_samplers=graph_samplers, searching_split=args.test_split, return_failures=True,
+                )
+            for offset, (source, target, prediction, score) in enumerate(
+                zip(batch.source, batch.target, predictions, scores)
+            ):
+                spec = None if batch.conditions is None else batch.conditions[offset]
+                records.append(build_evaluation_record(
+                    record_id=f"{args.test_split}:{record_index}", observation=source,
+                    reference=target, prediction=prediction, scores=score, condition=spec,
+                ))
+                record_index += 1
+    output_root = config.runtime_paths["run_root"] / config.experiment["name"]
+    jsonl_path = write_evaluation_jsonl(output_root / f"{args.test_split}.jsonl", records)
+    frame = pd.DataFrame.from_records(records)
+    metric_columns = ["jaccard", "dice", "overlap", "condition_accuracy", "smatch", "parse_ok"]
+    frame[metric_columns].mean(numeric_only=True).to_frame("mean").to_csv(
+        output_root / f"{args.test_split}.csv"
+    )
+    return jsonl_path
+
+
+def run_grpo(config, args) -> Path:
+    _require_cuda("GRPO")
+    parent = args.parent_checkpoint or args.checkpoint
+    if not parent:
+        raise ValueError("GRPO requires --parent-checkpoint with the conditional SFT checkpoint")
+    loaded = load_reproduction_checkpoint(
+        parent,
+        mode="parent",
+        expected_stage="conditional",
+        expected_condition=config.condition,
+        expected_config_hash=config.semantic_hash,
+        expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+    )
+    dataset_dict, _, _ = _datasets(config, ["train"])
+    tokenizer = loaded.tokenizer
+
+    def add_prompt(example):
+        value = condition_value_from_target(config.condition, example["target"])
+        spec = ConditionSpec(config.condition, value)
+        return {"prompt": build_prompt(example["source"], spec, tokenizer), "condition": value}
+
+    dataset = dataset_dict["train"].map(add_prompt)
+    graph_samplers = _graph_samplers(config)
+    output = config.runtime_paths["checkpoint_root"] / config.experiment["name"] / "grpo"
+    trainer = create_grpo_trainer(
+        model=loaded.model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        config=config,
+        output_dir=output,
+        graph_samplers=graph_samplers,
+        max_steps=args.max_steps,
+    )
+    train_grpo(trainer, resume_checkpoint=args.resume_checkpoint)
+    evaluation_checkpoint = output / f"evaluation-step-{int(trainer.state.global_step)}"
+    return save_reproduction_checkpoint(
+        evaluation_checkpoint,
+        model=trainer.model,
+        tokenizer=tokenizer,
+        stage="grpo",
+        stage_epoch=int(config.raw["grpo"]["epochs"]),
+        global_step=int(trainer.state.global_step),
+        condition=config.condition,
+        experiment_config=config.raw,
+        experiment_config_hash=config.semantic_hash,
+        seed=config.seed,
+        parent_checkpoint=parent,
+        data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+    )
+
+
+def run_experiment_config(args):
+    config = load_experiment_config(args.experiment_config)
+    seed_everything(config.seed)
+    output_root = config.runtime_paths["run_root"] / config.experiment["name"]
+    config.write_snapshots(output_root)
+    configure_reproduction_logging(output_root / "reproduction.log")
+    if args.mode == "training":
+        return run_sft(config, args)
+    if args.mode == "testing":
+        return run_evaluation(config, args)
+    if args.mode == "optimizing":
+        return run_grpo(config, args)
+    raise ValueError("Experiment config mode must be training, testing, or optimizing")

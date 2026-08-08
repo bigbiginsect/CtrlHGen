@@ -2,6 +2,7 @@
 import argparse
 
 import os, sys
+import hashlib
 import json
 import pandas as pd
 
@@ -17,6 +18,8 @@ from akgr.utils.load_util import load_yaml, load_csv, load_sampled_dataset
 
 from datasets import Dataset
 from akgr.utils.parsing_util import qry_shift_indices, ans_shift_indices, qry_str_2_actionstr, list_to_str
+from akgr.reproduction.config import ExperimentConfig
+from akgr.reproduction.seed import derive_seed, make_generator
 
 import pandas as pd
 
@@ -40,10 +43,94 @@ def pre_pre_processing(
     # print(pattern_id)
     # df = pd.DataFrame([source, target, pattern_id])
     # print("#")
-    return pd.concat({
+    processed = pd.concat({
         'source': source,
         'target': target,
         'pattern_id': pattern_id}, axis=1)
+    if 'record_id' in df:
+        processed['record_id'] = df['record_id']
+    return processed
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_manifest_artifact(manifest_path, artifact):
+    path = os.path.join(os.path.dirname(manifest_path), artifact['path'])
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Sampling artifact is missing: {path}")
+    actual_hash = _sha256_file(path)
+    if actual_hash != artifact['sha256']:
+        raise ValueError(
+            f"Sampling artifact hash mismatch for {path}: "
+            f"manifest={artifact['sha256']} actual={actual_hash}"
+        )
+    records = []
+    with open(path, encoding='utf-8') as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if line.strip():
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid JSONL at {path}:{line_number}") from exc
+    if len(records) != artifact['count']:
+        raise ValueError(
+            f"Sampling artifact count mismatch for {path}: "
+            f"manifest={artifact['count']} actual={len(records)}"
+        )
+    return records
+
+
+def create_reproduction_dataset(
+        experiment_config: ExperimentConfig,
+        pattern_filtered,
+        splits,
+        is_act: bool):
+    """Load hash-verified data selected by a strict reproduction manifest."""
+    manifest_path = experiment_config.sampling_manifest_path
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Sampling manifest not found: {manifest_path}. "
+            "Run akgr.sampling.sample_parallel with the same experiment config first."
+        )
+    with manifest_path.open(encoding='utf-8') as handle:
+        manifest = json.load(handle)
+    expected = {
+        'dataset': experiment_config.dataset,
+        'profile': experiment_config.experiment['profile'],
+        'seed': experiment_config.seed,
+        'semantic_hash': experiment_config.semantic_hash,
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            raise ValueError(
+                f"Sampling manifest {key} mismatch: expected {value!r}, "
+                f"found {manifest.get(key)!r}"
+            )
+    artifacts = manifest['artifacts']
+    pattern_str_2_id = dict(zip(pattern_filtered['pattern_str'], pattern_filtered.index))
+    dataset_dict = {}
+    for split in splits:
+        variant = experiment_config.raw['data']['training_variant'] \
+            if split == 'train' else 'base'
+        if split not in artifacts.get(variant, {}):
+            raise ValueError(f"Manifest has no {variant}.{split} artifact")
+        raw_records = _load_manifest_artifact(
+            str(manifest_path), artifacts[variant][split]
+        )
+        frame = pre_pre_processing(
+            data=raw_records,
+            pattern_str_2_id=pattern_str_2_id,
+            is_act=is_act,
+        )
+        dataset_dict[split] = Dataset.from_pandas(frame, split=split, preserve_index=False)
+    stats = manifest['stats']
+    return dataset_dict, int(stats['nentity']), int(stats['nrelation'])
 def new_create_dataset(dataname, scale, answer_size,
         pattern_filtered,
         data_root,
@@ -76,18 +163,22 @@ def new_create_dataset(dataname, scale, answer_size,
         dataset_dict[split] = Dataset.from_pandas(df, split=split)
 
     return dataset_dict, nentity, nrelation
-def new_create_dataloader(dataset_dict, batch_size:int, drop_last:bool=False, shuffle:bool=True) :
+def new_create_dataloader(dataset_dict, batch_size:int, drop_last:bool=False,
+                          shuffle:bool=True, seed:int=None, num_workers:int=4) :
     import warnings
     if drop_last:
         warnings.warn('drop_last is True')
     dataloader_dict = {}
     for split, dataset in dataset_dict.items():
+        split_shuffle = shuffle and split == 'train'
+        generator = None if seed is None else make_generator(derive_seed(seed, 'dataloader', split))
         dataloader_dict[split] = DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
+            shuffle=split_shuffle,
             drop_last=drop_last,
-            num_workers=4
+            num_workers=num_workers,
+            generator=generator,
         )
     return dataloader_dict
 

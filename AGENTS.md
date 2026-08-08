@@ -10,7 +10,7 @@ setup. The current user request defines the task at hand.
 
 ## Source of truth
 
-- Local checkout: `/mnt/d/yang_nankai/ctrlhgen`
+- Local checkout: `/mnt/d/yang_nankai/CtrlHGen`
 - Private working repo: `git@github.com:bigbiginsect/CtrlHGen.git` (`origin`)
 - Authors' repo: `https://github.com/HKUST-KnowComp/CtrlHGen.git` (`upstream`)
 - DSW checkout: `/mnt/workspace/CtrlHGen`
@@ -24,7 +24,7 @@ and never push to `upstream`.
 On the local machine:
 
 ```bash
-cd /mnt/d/yang_nankai/ctrlhgen
+cd /mnt/d/yang_nankai/CtrlHGen
 git status --short --branch
 # edit and validate
 git add <paths>

@@ -12,6 +12,12 @@ from tokenizers.trainers import WordLevelTrainer
 from tokenizers import Tokenizer
 from transformers import PreTrainedTokenizerFast, T5TokenizerFast, GPT2TokenizerFast
 import random
+
+from akgr.reproduction.contracts import (
+    ConditionSpec,
+    PreparedBatch,
+    normalize_condition,
+)
 def number_to_pattern(input_str):
     elements = input_str.split()
 
@@ -124,6 +130,190 @@ def create_tokenizer(
         # tokenizer.pad_token = tokenizer.eos_token
     return tokenizer, vocab_size
 
+
+def create_reproduction_tokenizer(nentity: int, nrelation: int):
+    """Create the strict reproduction tokenizer with a contiguous vocabulary.
+
+    ``create_tokenizer`` intentionally remains unchanged for legacy checkpoints,
+    whose numeric IDs contain the historical gap before entity tokens.  Fresh
+    reproduction checkpoints use this builder so ``vocab_size == len(tokenizer)``
+    and every ID in ``[0, vocab_size)`` is assigned exactly once.
+    """
+    if nentity <= 0 or nrelation <= 0:
+        raise ValueError("nentity and nrelation must be positive")
+    ordered_tokens = [
+        "PAD", "END", "START", "UNK", "SEP",
+        "(", ")", "e", "p", "i", "u", "n",
+        "1p", "2p", "3p", "4p",
+        "1e", "2e", "3e", "4e", "5e", "with",
+    ]
+    ordered_tokens.extend(str(index) for index in range(1, nentity + 1))
+    ordered_tokens.extend(str(-index) for index in range(1, nrelation + 1))
+    if len(ordered_tokens) != len(set(ordered_tokens)):
+        raise ValueError("Reproduction vocabulary contains duplicate tokens")
+    vocab = {token: index for index, token in enumerate(ordered_tokens)}
+    backend = Tokenizer(WordLevel(vocab, unk_token="UNK"))
+    backend.pre_tokenizer = WhitespaceSplit()
+    backend.post_processor = TemplateProcessing(
+        single="$0 SEP",
+        pair="$A SEP $B END",
+        special_tokens=[("SEP", vocab["SEP"]), ("END", vocab["END"])],
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        bos_token="START",
+        eos_token="END",
+        pad_token="PAD",
+        unk_token="UNK",
+        sep_token="SEP",
+    )
+    actual_ids = sorted(tokenizer.get_vocab().values())
+    if actual_ids != list(range(len(tokenizer))):
+        raise ValueError("Reproduction tokenizer IDs are not contiguous")
+    return tokenizer
+
+
+def condition_value_from_target(condition: str, target: str) -> str:
+    """Return the canonical control value encoded in a conditional prompt."""
+    condition = normalize_condition(condition)
+    if condition == "unconditional":
+        raise ValueError("Unconditional prompts do not have a condition value")
+    if condition == "pattern":
+        return number_to_pattern(target)
+    if condition == "relation_number":
+        return number_to_epnumber(target)[1]
+    if condition == "entity_number":
+        return number_to_epnumber(target)[0]
+    if condition == "specific_relation":
+        return number_to_epspecific(target)[1]
+    if condition == "specific_entity":
+        return number_to_epspecific(target)[0]
+    raise AssertionError(f"Unhandled normalized condition: {condition}")
+
+
+def build_prompt(source: str, condition: ConditionSpec | None, tokenizer) -> str:
+    """Build a prompt using the tokenizer's real separator token.
+
+    The legacy implementation used the literal ``[SEP]`` even though the
+    repository tokenizer contains ``SEP``.  Keeping this helper as the only
+    prompt builder prevents the condition delimiter from silently becoming
+    ``UNK``.
+    """
+    if condition is None:
+        return source
+    separator = tokenizer.sep_token
+    if not separator:
+        raise ValueError("The tokenizer must define sep_token for conditional prompts")
+    if tokenizer.convert_tokens_to_ids(separator) == tokenizer.unk_token_id:
+        raise ValueError(f"Tokenizer separator {separator!r} resolves to UNK")
+    return f"{source} {separator} {condition.value}"
+
+
+def prepare_batch(
+    device,
+    sample,
+    tokenizer,
+    is_gpt: bool,
+    src_len: int,
+    tgt_len: int,
+    is_gen: bool,
+    condition: str = "unconditional",
+) -> PreparedBatch:
+    """Prepare an unconditional or controlled batch through one code path."""
+    kind = normalize_condition(condition)
+    source = list(sample["source"])
+    target = list(sample["target"])
+    pattern_id = sample["pattern_id"]
+    conditions = None
+    if kind != "unconditional":
+        conditions = [ConditionSpec(kind, condition_value_from_target(kind, value)) for value in target]
+    prompts = [build_prompt(value, spec, tokenizer) for value, spec in zip(source, conditions or [None] * len(source))]
+
+    if not is_gpt:
+        prompt_tokens = tokenizer(
+            prompts,
+            padding="max_length",
+            truncation=True,
+            max_length=src_len,
+            return_tensors="pt",
+        ).to(device)
+        input_ids = prompt_tokens.input_ids
+        attention_mask = prompt_tokens.attention_mask
+        attention_mask[input_ids == tokenizer.eos_token_id] = 0
+        labels = tokenizer(
+            target,
+            padding="max_length",
+            truncation=True,
+            max_length=tgt_len,
+            return_tensors="pt",
+        ).input_ids.to(device)
+        source_attention_mask = prompt_tokens.attention_mask
+    else:
+        pair_tokens = tokenizer(
+            prompts,
+            target,
+            padding="longest",
+            truncation=True,
+            max_length=src_len + tgt_len,
+            return_tensors="pt",
+        ).to(device)
+        labels = pair_tokens.input_ids.clone()
+        prompt_tokens_for_mask = tokenizer(
+            prompts,
+            padding="max_length",
+            truncation=True,
+            max_length=labels.shape[-1],
+            return_tensors="pt",
+        ).to(device)
+        labels[prompt_tokens_for_mask.attention_mask == 1] = tokenizer.pad_token_id
+        if is_gen:
+            old_padding_side = tokenizer.padding_side
+            try:
+                tokenizer.padding_side = "left"
+                prompt_tokens = tokenizer(
+                    prompts,
+                    padding="longest",
+                    truncation=True,
+                    max_length=src_len,
+                    return_tensors="pt",
+                ).to(device)
+            finally:
+                tokenizer.padding_side = old_padding_side
+            input_ids = prompt_tokens.input_ids
+            attention_mask = prompt_tokens.attention_mask
+            source_attention_mask = prompt_tokens.attention_mask
+        else:
+            input_ids = pair_tokens.input_ids
+            attention_mask = pair_tokens.attention_mask
+            source_attention_mask = prompt_tokens_for_mask.attention_mask
+
+    labels[labels == tokenizer.pad_token_id] = -100
+    return PreparedBatch(
+        source=source,
+        target=target,
+        pattern_id=pattern_id,
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        labels=labels,
+        source_attention_mask=source_attention_mask,
+        conditions=conditions,
+    )
+
+
+def _legacy_prepared_tuple(batch: PreparedBatch):
+    base = (
+        batch.source,
+        batch.target,
+        batch.pattern_id,
+        batch.input_ids,
+        batch.attention_mask,
+        batch.labels,
+        batch.source_attention_mask,
+    )
+    if batch.conditions is None:
+        return base
+    return base + ([condition.value for condition in batch.conditions],)
+
 def search_one_hop(source, graph,src_len):
     G = graph
     new_source_list = []
@@ -156,6 +346,10 @@ import torch
 def new_extract_sample_to_device(device,
         sample, tokenizer, is_gpt:bool,
         src_len, tgt_len, is_gen:bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "unconditional"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -287,6 +481,10 @@ def new_extract_sample_to_device_search(device,
     return source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask
 
 def new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt: bool, src_len, tgt_len, is_gen: bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "pattern"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -350,6 +548,10 @@ def new_extract_sample_to_device_pattern(device, sample, tokenizer, is_gpt: bool
     return source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, target_pattern
 
 def new_extract_sample_to_device_number_entity(device, sample, tokenizer, is_gpt: bool, src_len, tgt_len, is_gen: bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "entity_number"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -412,6 +614,10 @@ def new_extract_sample_to_device_number_entity(device, sample, tokenizer, is_gpt
     return source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, target_pattern
 
 def new_extract_sample_to_device_number_relation(device, sample, tokenizer, is_gpt: bool, src_len, tgt_len, is_gen: bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "relation_number"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -474,6 +680,10 @@ def new_extract_sample_to_device_number_relation(device, sample, tokenizer, is_g
     return source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, target_pattern
 
 def new_extract_sample_to_device_specific_relation(device, sample, tokenizer, is_gpt: bool, src_len, tgt_len, is_gen: bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "specific_relation"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -536,6 +746,10 @@ def new_extract_sample_to_device_specific_relation(device, sample, tokenizer, is
     return source, target, pattern_id, input_ids, attention_mask, labels, source_attention_mask, target_pattern
 
 def new_extract_sample_to_device_specific_entity(device, sample, tokenizer, is_gpt: bool, src_len, tgt_len, is_gen: bool):
+    return _legacy_prepared_tuple(prepare_batch(
+        device, sample, tokenizer, is_gpt, src_len, tgt_len, is_gen, "specific_entity"
+    ))
+    # Legacy implementation retained below for source compatibility/history.
     source = sample['source']
     target = sample['target']
     pattern_id = sample['pattern_id']
@@ -721,23 +935,17 @@ def debug():
 def source_to_prompt(sample,args):
     source = sample['source']              # 单个字符串，如 "19346"
     target = sample['target']              # 单个目标
-    condition = args.condition
-
-    if condition == 'unconditional':
-        sample['prompt'] = source
-    elif condition == 'pattern':
-        target_pattern = number_to_pattern(target)
-        sample['prompt'] = f"{source} [SEP] {target_pattern}"
-    elif condition == 'relationnumber':
-        sample['prompt'] = f"{source} [SEP] {number_to_epnumber(target)[1]}"
-    elif condition == 'entitynumber':
-        sample['prompt'] = f"{source} [SEP] {number_to_epnumber(target)[0]}"
-    elif condition == 'relation':
-        sample['prompt'] = f"{source} [SEP] {number_to_epspecific(target)[1]}"
-    elif condition == 'entity':
-        sample['prompt'] = f"{source} [SEP] {number_to_epspecific(target)[0]}"
+    condition = normalize_condition(args.condition)
+    if condition == "unconditional":
+        sample["prompt"] = source
+        sample["condition"] = None
     else:
-        raise ValueError(f"Unsupported condition: {condition}")
+        value = condition_value_from_target(condition, target)
+        # This legacy mapping helper has no tokenizer argument.  ``SEP`` is the
+        # canonical token in create_tokenizer(); callers using another
+        # tokenizer should use build_prompt() directly.
+        sample["prompt"] = f"{source} SEP {value}"
+        sample["condition"] = value
     return sample
 if __name__ == '__main__':
     debug()

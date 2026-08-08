@@ -1,9 +1,13 @@
-from random import sample, choice, randint
+import random
 import numpy as np
 
 import networkx as nx
 
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:  # keep core offline graph tests independent of progress UI
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
 # The class that is used for sampling from a networkx graph.
 class GraphSampler:
@@ -92,12 +96,27 @@ class GraphSampler:
         return list(set(result_query_list))
 
     # The function used to call the recursion of sampling queries from the ASER graph.
-    def sample_valid_query_given_pattern(self, pattern):
-        while True:
-            tail_node = sample(self.dense_nodes, 1)[0] # randomly select an answer node
-            _query, _, _ = self.recur_sample_query_given_pattern_answer(pattern, tail_node)
+    def try_sample_query_given_pattern(self, pattern, rng=None):
+        """Make exactly one sampling attempt using the caller-owned RNG."""
+        rng = rng or random
+        tail_node = rng.choice(self.dense_nodes)
+        query, _, _ = self.recur_sample_query_given_pattern_answer(pattern, tail_node, rng=rng)
+        return query
+
+    def sample_valid_query_given_pattern(self, pattern, rng=None, max_attempts=None):
+        """Sample a query, optionally failing after a bounded number of attempts.
+
+        ``max_attempts=None`` preserves the historical unbounded API. The strict
+        reproduction sampler always supplies a finite limit.
+        """
+        rng = rng or random
+        attempts = 0
+        while max_attempts is None or attempts < max_attempts:
+            attempts += 1
+            _query = self.try_sample_query_given_pattern(pattern, rng=rng)
             if _query is not None:
                 return _query
+        raise RuntimeError(f"Unable to sample pattern after {attempts} attempts: {pattern}")
 
 
     def extract_operator_subqueries(self, pattern):
@@ -145,7 +164,7 @@ class GraphSampler:
 
         return operator, sub_queries
 
-    def recur_sample_query_given_pattern_answer(self, pattern: str, tail_node):
+    def recur_sample_query_given_pattern_answer(self, pattern: str, tail_node, rng=None):
         """
         Input:
         - pattern: "(operator, [edge], operand_1, ..., operand_n)",
@@ -164,6 +183,7 @@ class GraphSampler:
             - so for predecessor operators of "i", if in that level is operator(prev, answer),
               then return head_node instead of tail_node
         """
+        rng = rng or random
         operator, sub_pattern = self.extract_operator_subqueries(pattern)
 
         # projection has only one operand
@@ -171,9 +191,11 @@ class GraphSampler:
             if self.in_degree(tail_node) == 0:
                 return None, None, None
 
-            head_node, _, relation = choice(list(self.in_edges(tail_node)))
+            head_node, _, relation = rng.choice(list(self.in_edges(tail_node)))
 
-            sub_query, _, prev_relation = self.recur_sample_query_given_pattern_answer(sub_pattern[1], head_node)
+            sub_query, _, prev_relation = self.recur_sample_query_given_pattern_answer(
+                sub_pattern[1], head_node, rng=rng
+            )
             if sub_query is None:
                 return None, None, None
             if self.is_reverse_edge(prev_relation, relation):
@@ -191,7 +213,9 @@ class GraphSampler:
             on the final outcome
             """
 
-            sub_query, head_node, relation = self.recur_sample_query_given_pattern_answer(sub_pattern[1], tail_node)
+            sub_query, head_node, relation = self.recur_sample_query_given_pattern_answer(
+                sub_pattern[1], tail_node, rng=rng
+            )
             if sub_query is None:
                 return None, None, None
 
@@ -209,7 +233,9 @@ class GraphSampler:
             from_node_list = []
 
             for pattern in sub_pattern[1:]:
-                sub_q, head_node, relation = self.recur_sample_query_given_pattern_answer(pattern, tail_node)
+                sub_q, head_node, relation = self.recur_sample_query_given_pattern_answer(
+                    pattern, tail_node, rng=rng
+                )
 
                 if (sub_q is None) or (sub_q in sub_queries_list) or (head_node in from_node_list):
                     return None, None, None
@@ -235,14 +261,18 @@ class GraphSampler:
             sub_queries_list = []
 
             # The answer only need to be one of the answers of all sub queries
-            random_subquery_index = randint(1, len(sub_pattern) - 1)
+            random_subquery_index = rng.randint(1, len(sub_pattern) - 1)
 
             head_node = None
             for i in range(1, len(sub_pattern)):
                 if i == random_subquery_index:
-                    sub_q, head_node, relation = self.recur_sample_query_given_pattern_answer(sub_pattern[i], tail_node)
+                    sub_q, head_node, relation = self.recur_sample_query_given_pattern_answer(
+                        sub_pattern[i], tail_node, rng=rng
+                    )
                 else:
-                    sub_q, _, relation = self.recur_sample_query_given_pattern_answer(sub_pattern[i], sample(list(self.graph.nodes()), 1)[0])
+                    sub_q, _, relation = self.recur_sample_query_given_pattern_answer(
+                        sub_pattern[i], rng.choice(self.dense_nodes), rng=rng
+                    )
 
                 if sub_q is None:
                     return None, None, None
@@ -287,12 +317,12 @@ class GraphSampler:
             for u, v, k in self.out_edges(sub_query_answers):
                 if k == relation_name:
                     all_answers.append(v)
-            all_answers = list(set(all_answers))
+            all_answers = sorted(set(all_answers))
             return all_answers
 
         elif operator == "e":
             # return list(set([int(sub_queries[1][1:-1])]))
-            return list(set([sub_queries[1][1]]))
+            return [sub_queries[1][1]]
 
         elif operator == "i":
 
@@ -306,7 +336,7 @@ class GraphSampler:
             for sub_query_answers in sub_query_answers_list:
                 merged_answers = merged_answers & set(sub_query_answers)
 
-            merged_answers = list(set(merged_answers))
+            merged_answers = sorted(merged_answers)
 
             return merged_answers
 
@@ -321,7 +351,7 @@ class GraphSampler:
             for sub_query_answers in sub_query_answers_list:
                 merged_answers = merged_answers | set(sub_query_answers)
 
-            merged_answers = list(set(merged_answers))
+            merged_answers = sorted(merged_answers)
 
             return merged_answers
 
@@ -330,7 +360,7 @@ class GraphSampler:
             all_nodes = list(self.graph.nodes)
             negative_answers = [node for node in all_nodes if node not in sub_query_answers]
 
-            negative_answers = list(set(negative_answers))
+            negative_answers = sorted(set(negative_answers))
             return negative_answers
 
         else:

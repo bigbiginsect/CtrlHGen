@@ -4,6 +4,9 @@ import networkx as nx
 
 
 import os, sys
+from pathlib import Path
+
+from akgr.reproduction.contracts import ConditionSpec
 
 # sys.path.append('./utils/')
 from akgr.utils.stat_util import compute_f1_rec_prec
@@ -327,7 +330,8 @@ def scoring_input_wordlist(
         searching_split=None,
         return_ans:bool=False,
         verbose:bool=False):
-    if ('jaccard' in scoring_method or 'f1precrec' in scoring_method) and searching_split == None:
+    answer_metrics = {'precrecf1', 'jaccard', 'dice', 'overlap', 'tanimoto'}
+    if answer_metrics.intersection(scoring_method) and searching_split == None:
         raise Exception('searching_split must be provided answer-based scoring method is specified')
     # label_ans has been detokenized
     # original_pred_qry_wordlist = qry_str_2_original_qry_str(pred_qry_wordlist)
@@ -373,7 +377,7 @@ def scoring_input_wordlist(
         # label_graph = qry_wordlist_2_graph(label_qry_wordlist)
         score = get_smatch_score(pred_graph, label_graph, verbose=verbose)
         score_dict_now['smatch'] = score
-    if 'precrecf1' in scoring_method or 'jaccard' in scoring_method:
+    if answer_metrics.intersection(scoring_method):
         output = get_ans_score(
             pred_qry_wordlist=pred_word_corrected,
             scoring_method=scoring_method,
@@ -635,3 +639,68 @@ def scoring_input_act_batch_condition(
         return scores, ans
     else:
         return scores if not return_failures else (scores, failures)
+
+
+def condition_accuracy(prediction: str, condition: ConditionSpec | None) -> float | None:
+    """Score adherence against the requested condition, not the reference query."""
+    if condition is None:
+        return None
+    if condition.kind == "pattern":
+        actual = number_to_pattern(prediction)
+    elif condition.kind == "entity_number":
+        actual = f"{number_to_epnumber(prediction)[0]}e"
+    elif condition.kind == "relation_number":
+        actual = f"{number_to_epnumber(prediction)[1]}p"
+    elif condition.kind in {"specific_entity", "specific_relation"}:
+        return float(condition.value in prediction.split())
+    else:
+        raise ValueError(f"Unsupported condition kind: {condition.kind}")
+    return float(actual == condition.value)
+
+
+def parse_action_status(prediction: str) -> tuple[bool, str | None]:
+    """Distinguish parse failures from valid predictions with zero scores."""
+    try:
+        wordlist = qry_actionstr_2_wordlist(prediction)
+        if wordlist is None or qry_wordlist_2_graph(wordlist) is None:
+            return False, "invalid_action_sequence"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, None
+
+
+def build_evaluation_record(
+    *,
+    record_id: str,
+    observation: str,
+    reference: str,
+    prediction: str,
+    scores: dict,
+    condition: ConditionSpec | None = None,
+) -> dict:
+    """Build the stable per-sample JSONL contract for Phase A evaluation."""
+    parse_ok, parse_error = parse_action_status(prediction)
+    return {
+        "record_id": str(record_id),
+        "observation": observation,
+        "condition": None if condition is None else {"kind": condition.kind, "value": condition.value},
+        "reference": reference,
+        "prediction": prediction,
+        "jaccard": float(scores.get("jaccard", 0.0)),
+        "dice": float(scores.get("dice", 0.0)),
+        "overlap": float(scores.get("overlap", 0.0)),
+        "condition_accuracy": condition_accuracy(prediction, condition),
+        "smatch": float(scores.get("smatch", 0.0)),
+        "parse_ok": parse_ok,
+        "parse_error": parse_error,
+    }
+
+
+def write_evaluation_jsonl(path, records) -> Path:
+    """Write per-sample evaluation records without hiding malformed outputs."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    return destination

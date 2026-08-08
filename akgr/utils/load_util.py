@@ -115,6 +115,16 @@ def jsonl_2_pickle(data_root, dataname, scale, answer_size,
 import torch
 import torch.nn as nn
 import transformers
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+import random
+import shutil
+import tempfile
+from pathlib import Path
+
+import numpy as np
 def load_model(path, contents:str, epoch,
                return_huggingface_model:bool,
                model=None, optimizer=None, scheduler=None):
@@ -194,6 +204,183 @@ def save_model(path, contents:str,
     else:
         print(f'# Error: contents "{contents}" not supported')
         exit()
+
+
+CHECKPOINT_FORMAT_VERSION = 1
+
+
+@dataclass
+class LoadedReproductionCheckpoint:
+    path: Path
+    model: transformers.PreTrainedModel
+    tokenizer: transformers.PreTrainedTokenizerBase
+    metadata: dict
+    training_state: dict
+
+
+def _capture_rng_state() -> dict:
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: dict) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _state_dict_cpu(model) -> dict:
+    return {key: value.detach().cpu() for key, value in model.state_dict().items()}
+
+
+def _json_sha256(value: dict) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _model_config_hash(config) -> str:
+    payload = config.to_dict()
+    for volatile_key in (
+        "_name_or_path",
+        "_commit_hash",
+        "transformers_version",
+        "_attn_implementation_autoset",
+    ):
+        payload.pop(volatile_key, None)
+    return _json_sha256(payload)
+
+
+def save_reproduction_checkpoint(
+    path,
+    *,
+    model,
+    tokenizer,
+    stage: str,
+    stage_epoch: int,
+    global_step: int,
+    condition: str,
+    experiment_config: dict,
+    experiment_config_hash: str,
+    seed: int,
+    parent_checkpoint: str | None = None,
+    optimizer=None,
+    scheduler=None,
+    data_manifest_hash: str | None = None,
+) -> Path:
+    """Atomically save a portable Phase A checkpoint directory."""
+    target = Path(path).expanduser().resolve()
+    if target.exists():
+        raise FileExistsError(f"Checkpoint already exists: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
+    try:
+        model.config.to_json_file(temporary / "config.json")
+        model.save_pretrained(temporary / "model", safe_serialization=True)
+        tokenizer.save_pretrained(temporary / "tokenizer")
+        metadata = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "stage": stage,
+            "stage_epoch": int(stage_epoch),
+            "global_step": int(global_step),
+            "condition": condition,
+            "parent_checkpoint": str(Path(parent_checkpoint).expanduser().resolve()) if parent_checkpoint else None,
+            "seed": int(seed),
+            "experiment_config_hash": experiment_config_hash,
+            "experiment_config": experiment_config,
+            "data_manifest_hash": data_manifest_hash,
+            "model_config_hash": _model_config_hash(model.config),
+            "tokenizer_vocab_hash": _json_sha256(tokenizer.get_vocab()),
+        }
+        (temporary / "metadata.json").write_text(
+            json.dumps(metadata, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        training_state = {
+            "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+            "rng_state": _capture_rng_state(),
+        }
+        torch.save(training_state, temporary / "training_state.pt")
+        os.replace(temporary, target)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return target
+
+
+def load_reproduction_checkpoint(
+    path,
+    *,
+    mode: str,
+    model=None,
+    optimizer=None,
+    scheduler=None,
+    expected_stage: str | None = None,
+    expected_condition: str | None = None,
+    expected_config_hash: str | None = None,
+    expected_data_manifest_hash: str | None = None,
+    restore_rng: bool = False,
+    map_location="cpu",
+) -> LoadedReproductionCheckpoint:
+    """Load a parent, resume, or evaluation checkpoint with strict checks."""
+    if mode not in {"parent", "resume", "test"}:
+        raise ValueError("mode must be parent, resume, or test")
+    root = Path(path).expanduser().resolve()
+    required = {"metadata.json", "config.json", "model", "training_state.pt", "tokenizer"}
+    missing = [name for name in sorted(required) if not (root / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"Incomplete checkpoint {root}; missing: {missing}")
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("format_version") != CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(f"Unsupported checkpoint format: {metadata.get('format_version')}")
+    if expected_stage is not None and metadata["stage"] != expected_stage:
+        raise ValueError(f"Checkpoint stage {metadata['stage']!r} != expected {expected_stage!r}")
+    if expected_condition is not None and metadata["condition"] != expected_condition:
+        raise ValueError(f"Checkpoint condition {metadata['condition']!r} != expected {expected_condition!r}")
+    if expected_config_hash is not None and metadata["experiment_config_hash"] != expected_config_hash:
+        raise ValueError("Checkpoint experiment config hash does not match")
+    if expected_data_manifest_hash is not None and metadata.get("data_manifest_hash") != expected_data_manifest_hash:
+        raise ValueError("Checkpoint data manifest hash does not match")
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(root / "tokenizer", local_files_only=True)
+    if model is None:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            root / "model", local_files_only=True
+        )
+    else:
+        saved_model = transformers.AutoModelForCausalLM.from_pretrained(
+            root / "model", local_files_only=True
+        )
+        model.load_state_dict(saved_model.state_dict(), strict=True)
+        # save_pretrained may add stable serialization fields such as
+        # ``architectures``.  Adopt the saved config so an equivalent freshly
+        # instantiated model validates exactly like a directly loaded model.
+        model.config = saved_model.config
+        model.generation_config = saved_model.generation_config
+        del saved_model
+    training_state = torch.load(root / "training_state.pt", map_location=map_location, weights_only=False)
+
+    if _model_config_hash(model.config) != metadata["model_config_hash"]:
+        raise ValueError("Loaded model config does not match checkpoint metadata")
+    if _json_sha256(tokenizer.get_vocab()) != metadata["tokenizer_vocab_hash"]:
+        raise ValueError("Loaded tokenizer vocab does not match checkpoint metadata")
+    if mode == "resume":
+        if optimizer is None or scheduler is None:
+            raise ValueError("resume mode requires an instantiated optimizer and scheduler")
+        if training_state["optimizer_state_dict"] is None or training_state["scheduler_state_dict"] is None:
+            raise ValueError("Checkpoint does not contain optimizer/scheduler state")
+        optimizer.load_state_dict(training_state["optimizer_state_dict"])
+        scheduler.load_state_dict(training_state["scheduler_state_dict"])
+        if restore_rng:
+            _restore_rng_state(training_state["rng_state"])
+    return LoadedReproductionCheckpoint(root, model, tokenizer, metadata, training_state)
 
 if __name__ == '__main__':
     print(yaml.dump(load_yaml('akgr/configs/config-dataloader.yml')))

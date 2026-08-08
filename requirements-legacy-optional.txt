@@ -1,0 +1,9 @@
+# Optional dependencies for author-era utilities outside the supported
+# WN18RR + pattern reproduction path.  These do not make the legacy shell
+# scripts reproducible and are not required for Phase A verification.
+ogb==1.3.6
+optimum==1.24.0
+optuna==4.2.1
+peft==0.14.0
+sentencepiece==0.2.0
+torch-max-mem==0.1.3

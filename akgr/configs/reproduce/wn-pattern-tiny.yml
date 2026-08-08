@@ -1,0 +1,64 @@
+schema_version: 1
+experiment:
+  name: repro-wn-pattern-tiny
+  dataset: WN18RR
+  profile: tiny
+  seed: 42
+  condition: pattern
+data:
+  max_answers: 32
+  split_ratios: [0.8, 0.1, 0.1]
+  reverse_edges: true
+  max_attempts_per_record: 10000
+  workers: 4
+  training_variant: merged
+sampling:
+  train_per_pattern: 8
+  valid_per_pattern: 2
+  test_per_pattern: 2
+augmentation:
+  enabled: true
+  splits: [train]
+  source_patterns: [up, 3in, pni, pin, inp]
+model:
+  type: gpt2
+  initialization: random
+  n_layer: 12
+  n_embd: 768
+  n_head: 12
+  n_positions: 1024
+  n_ctx: 1024
+training:
+  gradient_accumulation_steps: 32
+  unconditional:
+    epochs: 1
+    warmup_epochs: 0
+    learning_rate: 1.0e-5
+    micro_batch_size: 8
+    effective_batch_size: 256
+  conditional:
+    epochs: 1
+    warmup_epochs: 0
+    learning_rate: 1.0e-5
+    micro_batch_size: 8
+    effective_batch_size: 256
+generation:
+  do_sample: true
+  top_k: 0
+  top_p: 1.0
+  temperature: 1.0
+  max_new_tokens: 33
+grpo:
+  num_generations: 4
+  per_device_train_batch_size: 4
+  epochs: 1
+  learning_rate: 1.0e-5
+  beta: 0.1
+  epsilon: 0.2
+  max_completion_length: 33
+  report_to: []
+  reward_weights:
+    jaccard: 1.0
+    dice: 0.5
+    overlap: 0.5
+    condition: 1.0

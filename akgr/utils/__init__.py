@@ -1,1 +1,1 @@
-print('# akgr/utils/__init__')
+"""Utility helpers for CtrlHGen."""

@@ -22,6 +22,36 @@ from akgr.abduction_model.t5 import myT5
 # from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments
 # from transformers import DataCollatorForLanguageModeling
 
+
+def create_gpt2_config(tokenizer, model_config: dict) -> GPT2Config:
+    """Build the Phase A GPT-2 config without network/local-template access."""
+    required = {"n_layer", "n_embd", "n_head", "n_positions", "n_ctx"}
+    missing = required - set(model_config)
+    if missing:
+        raise ValueError(f"Missing explicit GPT-2 config keys: {sorted(missing)}")
+    if int(model_config["n_embd"]) % int(model_config["n_head"]):
+        raise ValueError("GPT-2 n_embd must be divisible by n_head")
+    vocab_size = len(tokenizer)
+    token_ids = tokenizer.get_vocab().values()
+    if token_ids and max(token_ids) >= vocab_size:
+        raise ValueError("Tokenizer contains an id outside len(tokenizer)")
+    return GPT2Config(
+        vocab_size=vocab_size,
+        pad_token_id=tokenizer.pad_token_id,
+        bos_token_id=tokenizer.bos_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        n_layer=int(model_config["n_layer"]),
+        n_embd=int(model_config["n_embd"]),
+        n_head=int(model_config["n_head"]),
+        n_positions=int(model_config["n_positions"]),
+        n_ctx=int(model_config["n_ctx"]),
+    )
+
+
+def create_reproduction_transformer(tokenizer, model_config: dict) -> GPT2LMHeadModel:
+    """Create a randomly initialized, strict-config reproduction model."""
+    return GPT2LMHeadModel(create_gpt2_config(tokenizer, model_config))
+
 def create_transformer(ntoken: int, special_tokens: dict,
         model_name: str, config_model: dict):
 
@@ -64,10 +94,16 @@ def create_transformer(ntoken: int, special_tokens: dict,
         else:
             return None
     elif 'GPT2' in model_name:
-        # default = huggingface gpt2 = the smallest version of GPT-2, with 124M parameters.
-        config = GPT2Config.from_pretrained(
-            './hug_model',
-            **common_config
+        # Historical YAML used ``num_layers`` (not a GPT2Config field), so
+        # translate it deliberately while keeping this entry point offline.
+        legacy_layers = int(common_config.pop("num_layers", common_config.pop("n_layer", 12)))
+        config = GPT2Config(
+            n_layer=legacy_layers,
+            n_embd=int(common_config.pop("n_embd", 768)),
+            n_head=int(common_config.pop("n_head", 12)),
+            n_positions=int(common_config.pop("n_positions", 1024)),
+            n_ctx=int(common_config.pop("n_ctx", 1024)),
+            **common_config,
         )
         if 'GPT2_6' in model_name:
             transformer = GPT2LMHeadModel(config)
@@ -129,10 +165,14 @@ class TransformerModel(nn.Module):
             else:
                 return None
         elif 'GPT2' in model_name:
-            # default = huggingface gpt2 = the smallest version of GPT-2, with 124M parameters.
-            self.config = GPT2Config.from_pretrained(
-                './hug_model',
-                **common_config
+            legacy_layers = int(common_config.pop("num_layers", common_config.pop("n_layer", 12)))
+            self.config = GPT2Config(
+                n_layer=legacy_layers,
+                n_embd=int(common_config.pop("n_embd", 768)),
+                n_head=int(common_config.pop("n_head", 12)),
+                n_positions=int(common_config.pop("n_positions", 1024)),
+                n_ctx=int(common_config.pop("n_ctx", 1024)),
+                **common_config,
             )
             # if model_name == 'GPT2-disable-pos':
             #     #self.transformer = myGPT2LM(self.config)
