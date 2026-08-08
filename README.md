@@ -38,6 +38,7 @@ export CTRLHGEN_DATA_ROOT=/mnt/workspace/ctrlhgen-data
 export CTRLHGEN_CHECKPOINT_ROOT=/mnt/workspace/ctrlhgen-checkpoints
 export CTRLHGEN_RUN_ROOT=/mnt/workspace/ctrlhgen-runs
 export HF_HOME=/mnt/workspace/cache/huggingface
+export PYKEEN_HOME=/mnt/workspace/cache/pykeen
 export TRITON_CACHE_DIR=/mnt/workspace/cache/triton
 export NLTK_DATA=/mnt/workspace/cache/nltk
 ```

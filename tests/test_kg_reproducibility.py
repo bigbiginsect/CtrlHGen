@@ -14,6 +14,15 @@ def _triples(count=20):
     )
 
 
+def test_module_distribution_version_supports_pykeen_without_dunder_version(monkeypatch):
+    module = SimpleNamespace(__name__="pykeen")
+    monkeypatch.setattr(load_kg_util.importlib_metadata, "version", lambda name: "1.11.0")
+    assert load_kg_util._module_distribution_version(module) == "1.11.0"
+
+    module.__version__ = "test"
+    assert load_kg_util._module_distribution_version(module) == "test"
+
+
 def test_canonical_split_is_input_order_independent():
     triples = _triples()
     shuffled = triples.sample(frac=1, random_state=999)

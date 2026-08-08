@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+from importlib import metadata as importlib_metadata
 import json
 from pathlib import Path
 import pickle
@@ -26,6 +27,14 @@ from akgr.kgdata.kgclass import KG
 TRIPLE_COLUMNS = ["head_id", "tail_id", "relation_id"]
 CANONICAL_COLUMNS = ["head_id", "relation_id", "tail_id"]
 KG_MANIFEST_SCHEMA = 1
+
+
+def _module_distribution_version(module: Any) -> str:
+    """Return a package version even when the module omits ``__version__``."""
+    module_version = getattr(module, "__version__", None)
+    if module_version is not None:
+        return str(module_version)
+    return importlib_metadata.version(module.__name__)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -324,16 +333,17 @@ def load_kg(
     )
     with cache_path.open("wb") as handle:
         pickle.dump(kg, handle)
+    pykeen_version = _module_distribution_version(pykeen)
     manifest = {
         "schema_version": KG_MANIFEST_SCHEMA,
         "dataset": dataname,
         "dataset_class": dataset_class_name,
-        "pykeen_version": pykeen.__version__,
+        "pykeen_version": pykeen_version,
         "source": {
             "provider": "pykeen",
             "dataset": dataname,
             "dataset_class": dataset_class_name,
-            "pykeen_version": pykeen.__version__,
+            "pykeen_version": pykeen_version,
         },
         "seed": int(seed) if seed is not None else None,
         "effective_seed": effective_seed,
