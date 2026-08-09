@@ -32,10 +32,13 @@ def test_stage_specific_best_validation_selection():
     )
     unconditional = {"validation_loss": 2.0, "jaccard": 0.2}
     assert is_better_validation(
-        "unconditional", {"validation_loss": 1.5, "jaccard": 0.0}, unconditional
+        "unconditional", {"validation_loss": 1.5, "jaccard": 0.2}, unconditional
     )
     assert not is_better_validation(
-        "unconditional", {"validation_loss": 2.1, "jaccard": 1.0}, unconditional
+        "unconditional", {"validation_loss": 1.0, "jaccard": 0.1}, unconditional
+    )
+    assert is_better_validation(
+        "unconditional", {"validation_loss": 2.1, "jaccard": 0.3}, unconditional
     )
     assert is_better_validation(
         "unconditional",
