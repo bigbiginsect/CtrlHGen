@@ -101,6 +101,9 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
     assert config.raw["training"]["conditional"]["data_variant"] == "base"
     assert config.raw["grpo"]["data_variant"] == "base"
     if profile in {"small", "full"}:
+        assert config.raw["training"]["gradient_accumulation_steps"] == 1
+        assert config.raw["training"]["unconditional"]["micro_batch_size"] == 256
+        assert config.raw["training"]["conditional"]["micro_batch_size"] == 256
         assert (
             config.raw["training"]["unconditional"]["epochs"],
             config.raw["training"]["unconditional"]["warmup_epochs"],

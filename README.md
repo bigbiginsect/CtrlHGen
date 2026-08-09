@@ -128,6 +128,12 @@ Jaccard, and validation loss; conditional selection prioritizes Pattern
 Accuracy, parseability, Jaccard, and validation loss.  Selection never reads
 the test split.
 
+On the DSW L20, a worst-case sampled conditional batch of shape `256 x 52`
+used 19.75 GiB peak allocated memory and 0.62 seconds for one forward/backward
+optimizer step.  The small/full configs therefore use a direct micro-batch of
+256 with no gradient accumulation, matching the paper effective batch while
+avoiding thousands of under-filled GPU launches per epoch.
+
 Small-profile SFT makes a periodic checkpoint every 25 stage epochs and also saves a newly
 selected best checkpoint.  Pruning retains the two newest checkpoints and the
 current best; the configured final epoch is always saved.  The selected model

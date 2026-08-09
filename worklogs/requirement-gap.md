@@ -43,6 +43,7 @@
 - 无条件阶段使用 merged augmentation，conditional/GRPO 使用按 pattern 平衡的 base train；
 - `semantic_hash`、`data_hash`、`kg_hash` 分离，改训练预算不再重建完全相同的数据；
 - small 配置恢复论文的 400+50 epoch SFT 日程，只缩放每 pattern 样本数，避免同时缩数据和缩优化步数。
+- L20 实测最复杂 conditional batch `256 x 52` 峰值显存 19.75 GiB、一步 0.62 秒；small/full 因而直接使用 micro-batch 256、accumulation 1，保持论文 effective batch 256，并把预计 Phase C 墙钟时间降到约 6–8 小时。
 
 因此，旧 Phase C checkpoint **不可续训或用于 Phase D**。必须从 format-v2 无条件模型重新开始；正式 small run 先以 greedy validation 的 `parse_ok >= 0.90`、`eos_rate >= 0.98` 为阶段门槛。
 
