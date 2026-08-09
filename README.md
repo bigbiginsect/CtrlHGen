@@ -113,6 +113,31 @@ passes should `wn-pattern-small.yml` be considered for a scaled experiment.
 The `full` profile reflects an author-code scale clue and must not be presented
 as a fully disclosed paper setting.
 
+## Phase C/D checkpoint and validation policy
+
+The `small` profile validates SFT every two stage epochs with deterministic
+greedy decoding.  It writes every validation prediction and aggregate metric
+under `$CTRLHGEN_RUN_ROOT/repro-wn-pattern-small/validation/`, plus an append-only
+stage history JSONL.  Unconditional SFT selects the lowest validation loss
+(Jaccard tie-break); conditional SFT selects the highest validation Pattern
+Accuracy (Jaccard, then validation-loss tie-breaks).  Selection never reads the
+test split.
+
+SFT makes a periodic checkpoint every five stage epochs and also saves a newly
+selected best checkpoint.  Pruning retains the two newest checkpoints and the
+current best; the configured final epoch is always saved.  The selected model
+is exposed as `unconditional-best.json`/`conditional-best.json` and a matching
+directory symlink in the experiment checkpoint root.  Phase D GRPO saves every
+100 optimizer steps and retains the latest two resumable Trainer checkpoints.
+The `tiny` and `full` profiles use the same policy with cadence values scaled
+for smoke testing and longer training, respectively.
+
+Seeded CUDA runs may warn that CuBLAS or memory-efficient attention is not
+bitwise deterministic.  These warnings do not invalidate training, but exact
+bit-for-bit replay is not claimed; formal comparisons retain fixed data splits,
+configuration, checkpoints, and run seeds, and should use the planned repeated
+seeds when budget permits.
+
 ## Supported and legacy boundaries
 
 - Supported reproduction path: WN18RR, 13 query patterns, pattern condition,

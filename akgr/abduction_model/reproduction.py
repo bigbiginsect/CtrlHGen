@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import math
+import os
 from pathlib import Path
+import re
+import shutil
 from typing import Callable
 
 import torch
@@ -40,6 +44,101 @@ class OptimizerSchedule:
     optimizer_steps_per_epoch: int
     warmup_steps: int
     total_steps: int
+
+
+def epoch_due(stage_epoch: int, final_epoch: int, every_epochs: int) -> bool:
+    """Run periodic work on schedule and always at the configured final epoch."""
+    return int(stage_epoch) == int(final_epoch) or int(stage_epoch) % int(every_epochs) == 0
+
+
+def validation_selection_key(stage: str, record: dict) -> tuple[float, ...]:
+    """Return the fixed model-selection ordering for one SFT stage."""
+    validation_loss = float(record["validation_loss"])
+    jaccard = float(record.get("jaccard") or 0.0)
+    if stage == "unconditional":
+        return (-validation_loss, jaccard)
+    if stage == "conditional":
+        condition_accuracy = float(record.get("condition_accuracy") or 0.0)
+        return (condition_accuracy, jaccard, -validation_loss)
+    raise ValueError(f"Unknown SFT stage: {stage!r}")
+
+
+def is_better_validation(stage: str, candidate: dict, current: dict | None) -> bool:
+    """Select lower loss for unconditional and condition adherence for conditional."""
+    if current is None:
+        return True
+    return validation_selection_key(stage, candidate) > validation_selection_key(stage, current)
+
+
+def append_jsonl(path, record: dict) -> Path:
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    return destination
+
+
+def write_best_checkpoint_pointer(path, *, checkpoint: Path, record: dict) -> Path:
+    """Atomically publish the one best-checkpoint pointer for an SFT stage."""
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    best_link = destination.with_suffix("")
+    payload = {
+        "schema_version": 1,
+        "stage": record["stage"],
+        "stage_epoch": int(record["stage_epoch"]),
+        "checkpoint": checkpoint.name,
+        "best_checkpoint": best_link.name,
+        "selection": (
+            ["validation_loss:min", "jaccard:max"]
+            if record["stage"] == "unconditional"
+            else ["condition_accuracy:max", "jaccard:max", "validation_loss:min"]
+        ),
+        "validation": record,
+    }
+    temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, destination)
+    temporary_link = best_link.with_name(f".{best_link.name}.tmp-{os.getpid()}")
+    temporary_link.symlink_to(checkpoint.name, target_is_directory=True)
+    os.replace(temporary_link, best_link)
+    return destination
+
+
+def load_best_checkpoint_record(path) -> dict | None:
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        return None
+    return json.loads(source.read_text(encoding="utf-8"))["validation"]
+
+
+def prune_sft_checkpoints(root, *, stage: str, keep_last: int, best_epoch: int | None) -> list[Path]:
+    """Keep the latest periodic checkpoints plus the selected best checkpoint."""
+    directory = Path(root).expanduser().resolve()
+    pattern = re.compile(rf"^{re.escape(stage)}-epoch-(\d+)$")
+    checkpoints: list[tuple[int, Path]] = []
+    if not directory.is_dir():
+        return []
+    for candidate in directory.iterdir():
+        match = pattern.fullmatch(candidate.name)
+        if match and candidate.is_dir():
+            checkpoints.append((int(match.group(1)), candidate))
+    checkpoints.sort()
+    protected = {epoch for epoch, _ in checkpoints[-int(keep_last):]}
+    if best_epoch is not None:
+        protected.add(int(best_epoch))
+    removed = []
+    for epoch, candidate in checkpoints:
+        if epoch in protected:
+            continue
+        if candidate.parent.resolve() != directory:
+            raise ValueError(f"Refusing to prune checkpoint outside {directory}: {candidate}")
+        shutil.rmtree(candidate)
+        removed.append(candidate)
+    return removed
 
 
 def create_sft_optimizer_schedule(
@@ -106,6 +205,27 @@ def sft_train_epoch(
     return total_loss / num_batches, optimizer_steps
 
 
+def sft_validation_loss(*, model, dataloader, prepare: Callable) -> float:
+    """Compute a sample-weighted teacher-forced validation loss."""
+    model.eval()
+    weighted_loss = 0.0
+    sample_count = 0
+    with torch.no_grad():
+        for sample in dataloader:
+            batch = prepare(sample)
+            output = model(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                labels=batch.labels,
+            )
+            batch_size = int(batch.input_ids.shape[0])
+            weighted_loss += float(output.loss.detach().cpu()) * batch_size
+            sample_count += batch_size
+    if sample_count == 0:
+        raise ValueError("Validation dataloader is empty")
+    return weighted_loss / sample_count
+
+
 def _condition_scoring_method(condition: str) -> tuple[str, str]:
     condition = normalize_condition(condition)
     if condition == "pattern":
@@ -168,11 +288,13 @@ def make_grpo_reward_functions(
     ]
 
 
-def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: int = 1):
+def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: int | None = None):
     """Construct the pinned TRL 0.16 GRPO settings with no evaluation/W&B."""
     from trl import GRPOConfig
 
     grpo = config.raw["grpo"] if hasattr(config, "raw") else config["grpo"]
+    if save_steps is None:
+        save_steps = int(grpo["save_steps"])
     weights = grpo["reward_weights"]
     return GRPOConfig(
         output_dir=str(Path(output_dir)),
@@ -196,7 +318,7 @@ def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: in
         report_to=[],
         save_strategy="steps",
         save_steps=int(save_steps),
-        save_total_limit=2,
+        save_total_limit=int(grpo["save_total_limit"]),
     )
 
 

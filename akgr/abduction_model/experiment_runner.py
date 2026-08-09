@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import partial
 import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -11,11 +12,18 @@ import torch
 from torch.utils.data import DataLoader
 
 from akgr.abduction_model.reproduction import (
+    append_jsonl,
     configure_reproduction_logging,
     create_grpo_trainer,
     create_sft_optimizer_schedule,
+    epoch_due,
+    is_better_validation,
+    load_best_checkpoint_record,
+    prune_sft_checkpoints,
+    sft_validation_loss,
     sft_train_epoch,
     train_grpo,
+    write_best_checkpoint_pointer,
 )
 from akgr.abduction_model.transformer import create_reproduction_transformer
 from akgr.dataloader import create_reproduction_dataset
@@ -100,6 +108,85 @@ def _file_sha256(path):
     return digest.hexdigest()
 
 
+def _evaluation_records(
+    *, config, dataloader, model, tokenizer, graph_samplers, device, split, condition_kind,
+    do_sample: bool,
+):
+    model.eval()
+    generation = config.raw["generation"]
+    records = []
+    record_index = 0
+    with torch.no_grad():
+        for sample in dataloader:
+            batch = prepare_batch(
+                device, sample, tokenizer, True, _prompt_length(config),
+                generation["max_new_tokens"], True, condition_kind,
+            )
+            generation_kwargs = {
+                "max_new_tokens": int(generation["max_new_tokens"]),
+                "do_sample": bool(do_sample),
+                "pad_token_id": tokenizer.pad_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+            }
+            if do_sample:
+                generation_kwargs.update(
+                    top_k=int(generation["top_k"]),
+                    top_p=float(generation["top_p"]),
+                    temperature=float(generation["temperature"]),
+                )
+            generated = model.generate(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                **generation_kwargs,
+            )
+            predictions = tokenizer.batch_decode(
+                generated[:, batch.input_ids.shape[1]:], skip_special_tokens=True
+            )
+            methods = ["smatch", "jaccard", "dice", "overlap"]
+            if batch.conditions is None:
+                scores, _ = scoring_input_act_batch(
+                    predictions, batch.target, batch.source, methods,
+                    graph_samplers=graph_samplers, searching_split=split, return_failures=True,
+                )
+            else:
+                condition_values = [item.value for item in batch.conditions]
+                condition_method = "specific" if config.condition.startswith("specific_") else "validity"
+                scores, _ = scoring_input_act_batch_condition(
+                    predictions, batch.target, batch.source, condition_values,
+                    methods + [condition_method], graph_samplers=graph_samplers,
+                    searching_split=split, return_failures=True,
+                )
+            for offset, (source, target, prediction, score) in enumerate(
+                zip(batch.source, batch.target, predictions, scores)
+            ):
+                spec = None if batch.conditions is None else batch.conditions[offset]
+                records.append(build_evaluation_record(
+                    record_id=f"{split}:{record_index}", observation=source,
+                    reference=target, prediction=prediction, scores=score, condition=spec,
+                ))
+                record_index += 1
+    return records
+
+
+def _aggregate_evaluation_metrics(records) -> dict[str, float | None]:
+    metric_columns = ["jaccard", "dice", "overlap", "condition_accuracy", "smatch", "parse_ok"]
+    metrics = {}
+    for name in metric_columns:
+        values = [float(record[name]) for record in records if record[name] is not None]
+        metrics[name] = sum(values) / len(values) if values else None
+    return metrics
+
+
+def _write_validation_artifacts(output_root: Path, *, stage: str, stage_epoch: int, records, summary) -> None:
+    validation_root = output_root / "validation"
+    stem = f"{stage}-epoch-{stage_epoch}"
+    write_evaluation_jsonl(validation_root / f"{stem}.jsonl", records)
+    (validation_root / f"{stem}.metrics.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _model_and_tokenizer(config, nentity, nrelation, args, stage):
     if args.resume_checkpoint:
         loaded = load_reproduction_checkpoint(
@@ -135,12 +222,18 @@ def run_sft(config, args) -> Path:
     if args.stage == "conditional" and not (args.parent_checkpoint or args.resume_checkpoint):
         raise ValueError("Conditional SFT requires --parent-checkpoint or --resume-checkpoint")
 
-    dataset_dict, nentity, nrelation = _datasets(config, ["train"])
+    dataset_dict, nentity, nrelation = _datasets(config, ["train", "valid"])
     stage_config = config.raw["training"][args.stage]
+    validation_config = config.raw["training"]["validation"]
+    checkpoint_config = config.raw["training"]["checkpoint"]
     dataloader = _loader(dataset_dict["train"], stage_config["micro_batch_size"], config.seed, True)
+    validation_loader = _loader(
+        dataset_dict["valid"], validation_config["batch_size"], config.seed, False
+    )
     model, tokenizer, loaded = _model_and_tokenizer(config, nentity, nrelation, args, args.stage)
     device = _require_cuda("SFT")
     model.to(device)
+    graph_samplers = _graph_samplers(config)
     schedule = create_sft_optimizer_schedule(
         model,
         learning_rate=stage_config["learning_rate"],
@@ -184,6 +277,10 @@ def run_sft(config, args) -> Path:
     if start_epoch >= final_epoch:
         raise ValueError(f"Checkpoint already reached configured {args.stage} epochs")
     root = config.runtime_paths["checkpoint_root"] / config.experiment["name"]
+    output_root = config.runtime_paths["run_root"] / config.experiment["name"]
+    history_path = output_root / f"{args.stage}-history.jsonl"
+    best_pointer_path = root / f"{args.stage}-best.json"
+    best_record = load_best_checkpoint_record(best_pointer_path)
     data_manifest_hash = _file_sha256(config.sampling_manifest_path)
     parent_reference = args.parent_checkpoint
     if parent_reference is None and loaded is not None:
@@ -196,7 +293,7 @@ def run_sft(config, args) -> Path:
             derive_seed(config.seed, args.stage, stage_epoch),
             True,
         )
-        _, steps = sft_train_epoch(
+        train_loss, steps = sft_train_epoch(
             model=model,
             dataloader=epoch_loader,
             prepare=prepare,
@@ -205,22 +302,99 @@ def run_sft(config, args) -> Path:
             gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
         )
         global_step += steps
-        output = save_reproduction_checkpoint(
-            root / f"{args.stage}-epoch-{stage_epoch}",
-            model=model,
-            tokenizer=tokenizer,
-            stage=args.stage,
-            stage_epoch=stage_epoch,
-            global_step=global_step,
-            condition=condition,
-            experiment_config=config.raw,
-            experiment_config_hash=config.semantic_hash,
-            seed=config.seed,
-            parent_checkpoint=parent_reference,
-            optimizer=schedule.optimizer,
-            scheduler=schedule.scheduler,
-            data_manifest_hash=data_manifest_hash,
+        history_record = {
+            "stage": args.stage,
+            "stage_epoch": stage_epoch,
+            "global_step": global_step,
+            "train_loss": train_loss,
+            "validation": None,
+            "checkpoint": None,
+            "is_best": False,
+        }
+        validation_record = None
+        improved = False
+        if epoch_due(stage_epoch, final_epoch, validation_config["every_epochs"]):
+            validation_prepare = partial(
+                prepare_batch,
+                device,
+                tokenizer=tokenizer,
+                is_gpt=True,
+                src_len=_prompt_length(config),
+                tgt_len=config.raw["generation"]["max_new_tokens"],
+                is_gen=False,
+                condition=condition,
+            )
+            validation_loss = sft_validation_loss(
+                model=model, dataloader=validation_loader, prepare=validation_prepare
+            )
+            validation_records = _evaluation_records(
+                config=config,
+                dataloader=validation_loader,
+                model=model,
+                tokenizer=tokenizer,
+                graph_samplers=graph_samplers,
+                device=device,
+                split="valid",
+                condition_kind=condition,
+                do_sample=False,
+            )
+            validation_record = {
+                "stage": args.stage,
+                "stage_epoch": stage_epoch,
+                "global_step": global_step,
+                "train_loss": train_loss,
+                "validation_loss": validation_loss,
+                **_aggregate_evaluation_metrics(validation_records),
+            }
+            improved = is_better_validation(args.stage, validation_record, best_record)
+            validation_record["is_best"] = improved
+            _write_validation_artifacts(
+                output_root,
+                stage=args.stage,
+                stage_epoch=stage_epoch,
+                records=validation_records,
+                summary=validation_record,
+            )
+            history_record["validation"] = validation_record
+
+        should_save = (
+            improved
+            or epoch_due(stage_epoch, final_epoch, checkpoint_config["every_epochs"])
         )
+        if should_save:
+            output = save_reproduction_checkpoint(
+                root / f"{args.stage}-epoch-{stage_epoch}",
+                model=model,
+                tokenizer=tokenizer,
+                stage=args.stage,
+                stage_epoch=stage_epoch,
+                global_step=global_step,
+                condition=condition,
+                experiment_config=config.raw,
+                experiment_config_hash=config.semantic_hash,
+                seed=config.seed,
+                parent_checkpoint=parent_reference,
+                optimizer=schedule.optimizer,
+                scheduler=schedule.scheduler,
+                data_manifest_hash=data_manifest_hash,
+            )
+            history_record["checkpoint"] = output.name
+        if improved:
+            best_record = validation_record
+            history_record["is_best"] = True
+            write_best_checkpoint_pointer(
+                best_pointer_path, checkpoint=output, record=validation_record
+            )
+        history_record["pruned_checkpoints"] = []
+        if should_save:
+            removed = prune_sft_checkpoints(
+                root,
+                stage=args.stage,
+                keep_last=checkpoint_config["keep_last"],
+                best_epoch=None if best_record is None else best_record["stage_epoch"],
+            )
+            history_record["pruned_checkpoints"] = [path.name for path in removed]
+        append_jsonl(history_path, history_record)
     return output
 
 
@@ -238,58 +412,21 @@ def run_evaluation(config, args) -> Path:
     graph_samplers = _graph_samplers(config)
     device = _require_cuda("evaluation")
     model, tokenizer = loaded.model.to(device), loaded.tokenizer
-    model.eval()
-    generation = config.raw["generation"]
-    records = []
-    record_index = 0
     condition_kind = loaded.metadata["condition"]
-    with torch.no_grad():
-        for sample in dataloader:
-            batch = prepare_batch(
-                device, sample, tokenizer, True, _prompt_length(config),
-                generation["max_new_tokens"], True, condition_kind
-            )
-            generated = model.generate(
-                input_ids=batch.input_ids,
-                attention_mask=batch.attention_mask,
-                max_new_tokens=int(generation["max_new_tokens"]),
-                do_sample=bool(generation["do_sample"]),
-                top_k=int(generation["top_k"]),
-                top_p=float(generation["top_p"]),
-                temperature=float(generation["temperature"]),
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
-            predictions = tokenizer.batch_decode(
-                generated[:, batch.input_ids.shape[1]:], skip_special_tokens=True
-            )
-            methods = ["smatch", "jaccard", "dice", "overlap"]
-            if batch.conditions is None:
-                scores, _ = scoring_input_act_batch(
-                    predictions, batch.target, batch.source, methods,
-                    graph_samplers=graph_samplers, searching_split=args.test_split, return_failures=True,
-                )
-            else:
-                condition_values = [item.value for item in batch.conditions]
-                condition_method = "specific" if config.condition.startswith("specific_") else "validity"
-                scores, _ = scoring_input_act_batch_condition(
-                    predictions, batch.target, batch.source, condition_values, methods + [condition_method],
-                    graph_samplers=graph_samplers, searching_split=args.test_split, return_failures=True,
-                )
-            for offset, (source, target, prediction, score) in enumerate(
-                zip(batch.source, batch.target, predictions, scores)
-            ):
-                spec = None if batch.conditions is None else batch.conditions[offset]
-                records.append(build_evaluation_record(
-                    record_id=f"{args.test_split}:{record_index}", observation=source,
-                    reference=target, prediction=prediction, scores=score, condition=spec,
-                ))
-                record_index += 1
+    records = _evaluation_records(
+        config=config,
+        dataloader=dataloader,
+        model=model,
+        tokenizer=tokenizer,
+        graph_samplers=graph_samplers,
+        device=device,
+        split=args.test_split,
+        condition_kind=condition_kind,
+        do_sample=bool(config.raw["generation"]["do_sample"]),
+    )
     output_root = config.runtime_paths["run_root"] / config.experiment["name"]
     jsonl_path = write_evaluation_jsonl(output_root / f"{args.test_split}.jsonl", records)
-    frame = pd.DataFrame.from_records(records)
-    metric_columns = ["jaccard", "dice", "overlap", "condition_accuracy", "smatch", "parse_ok"]
-    frame[metric_columns].mean(numeric_only=True).to_frame("mean").to_csv(
+    pd.Series(_aggregate_evaluation_metrics(records), name="mean").to_csv(
         output_root / f"{args.test_split}.csv"
     )
     return jsonl_path

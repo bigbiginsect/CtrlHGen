@@ -63,6 +63,29 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
         "overlap": 0.5,
         "condition": 1.0,
     }
+    expected_runtime_policy = {
+        "tiny": {
+            "validation": {"every_epochs": 1, "batch_size": 4},
+            "checkpoint": {"every_epochs": 1, "keep_last": 2},
+            "grpo_save": (10, 2),
+        },
+        "small": {
+            "validation": {"every_epochs": 2, "batch_size": 16},
+            "checkpoint": {"every_epochs": 5, "keep_last": 2},
+            "grpo_save": (100, 2),
+        },
+        "full": {
+            "validation": {"every_epochs": 10, "batch_size": 16},
+            "checkpoint": {"every_epochs": 25, "keep_last": 2},
+            "grpo_save": (500, 2),
+        },
+    }[profile]
+    assert config.raw["training"]["validation"] == expected_runtime_policy["validation"]
+    assert config.raw["training"]["checkpoint"] == expected_runtime_policy["checkpoint"]
+    assert (
+        config.raw["grpo"]["save_steps"],
+        config.raw["grpo"]["save_total_limit"],
+    ) == expected_runtime_policy["grpo_save"]
 
 
 def test_runtime_paths_do_not_change_the_semantic_hash() -> None:

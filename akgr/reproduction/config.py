@@ -53,7 +53,13 @@ SECTION_KEYS = {
         "n_positions",
         "n_ctx",
     },
-    "training": {"gradient_accumulation_steps", "unconditional", "conditional"},
+    "training": {
+        "gradient_accumulation_steps",
+        "validation",
+        "checkpoint",
+        "unconditional",
+        "conditional",
+    },
     "generation": {"do_sample", "top_k", "top_p", "temperature", "max_new_tokens"},
     "grpo": {
         "num_generations",
@@ -63,12 +69,16 @@ SECTION_KEYS = {
         "beta",
         "epsilon",
         "max_completion_length",
+        "save_steps",
+        "save_total_limit",
         "report_to",
         "reward_weights",
     },
 }
 
 STAGE_KEYS = {"epochs", "warmup_epochs", "learning_rate", "micro_batch_size", "effective_batch_size"}
+VALIDATION_KEYS = {"every_epochs", "batch_size"}
+CHECKPOINT_KEYS = {"every_epochs", "keep_last"}
 REWARD_KEYS = {"jaccard", "dice", "overlap", "condition"}
 
 
@@ -152,6 +162,8 @@ def _validate(raw: dict[str, Any]) -> None:
         _require_exact_keys(section, value, allowed)
     for stage in ("unconditional", "conditional"):
         _require_exact_keys(f"training.{stage}", raw["training"][stage], STAGE_KEYS)
+    _require_exact_keys("training.validation", raw["training"]["validation"], VALIDATION_KEYS)
+    _require_exact_keys("training.checkpoint", raw["training"]["checkpoint"], CHECKPOINT_KEYS)
     _require_exact_keys("grpo.reward_weights", raw["grpo"]["reward_weights"], REWARD_KEYS)
 
     exp = raw["experiment"]
@@ -201,12 +213,20 @@ def _validate(raw: dict[str, Any]) -> None:
                 f"training.{stage}.effective_batch_size must equal "
                 "micro_batch_size * gradient_accumulation_steps"
             )
+    validation = raw["training"]["validation"]
+    checkpoint = raw["training"]["checkpoint"]
+    if int(validation["every_epochs"]) <= 0 or int(validation["batch_size"]) <= 0:
+        raise ValueError("training.validation values must be positive")
+    if int(checkpoint["every_epochs"]) <= 0 or int(checkpoint["keep_last"]) <= 0:
+        raise ValueError("training.checkpoint values must be positive")
 
     grpo = raw["grpo"]
     if grpo["num_generations"] != 4:
         raise ValueError("grpo.num_generations must be 4")
     if grpo["per_device_train_batch_size"] % grpo["num_generations"]:
         raise ValueError("GRPO batch size must be divisible by num_generations")
+    if int(grpo["save_steps"]) <= 0 or int(grpo["save_total_limit"]) <= 0:
+        raise ValueError("GRPO save_steps and save_total_limit must be positive")
     if grpo["report_to"] not in ([], "none", None):
         raise ValueError("Phase A defaults to disabled external reporting")
 

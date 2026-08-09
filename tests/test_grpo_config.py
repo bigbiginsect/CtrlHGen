@@ -13,6 +13,7 @@ def test_grpo_config_pins_paper_group_and_disables_external_reporting(tmp_path):
         "grpo": {
             "epochs": 1, "learning_rate": 1e-5, "beta": 0.1, "epsilon": 0.2,
             "per_device_train_batch_size": 4, "max_completion_length": 8,
+            "save_steps": 10, "save_total_limit": 2,
             "reward_weights": {"jaccard": 1.0, "dice": 0.5, "overlap": 0.5, "condition": 1.0},
         },
     }
@@ -23,7 +24,7 @@ def test_grpo_config_pins_paper_group_and_disables_external_reporting(tmp_path):
     assert result.eval_strategy.value == "no"
     assert result.report_to == []
     assert result.max_steps == 1
-    assert result.save_steps == 1
+    assert result.save_steps == 10
     assert result.save_total_limit == 2
 
 
