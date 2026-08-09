@@ -1,6 +1,6 @@
 schema_version: 1
 experiment:
-  name: diagnostic-wn-pattern-overfit-v4
+  name: diagnostic-wn-pattern-overfit-v5
   dataset: WN18RR
   profile: diagnostic
   seed: 42
@@ -48,8 +48,8 @@ training:
     effective_batch_size: 8
     data_variant: base
   conditional:
-    epochs: 25
-    warmup_epochs: 2
+    epochs: 100
+    warmup_epochs: 10
     learning_rate: 1.0e-4
     micro_batch_size: 8
     effective_batch_size: 8
