@@ -179,7 +179,8 @@ def diagnose(config, checkpoint, *, split: str, batch_size: int, max_samples: in
             "token_accuracy": token_correct / token_total,
             "sequence_accuracy": sequence_correct / sequence_total,
             "first_token_accuracy": first_correct / first_total,
-            "eos_accuracy": eos_correct / eos_total,
+            "eos_label_count": eos_total,
+            "eos_accuracy": eos_correct / eos_total if eos_total else None,
         },
         "prompt_only": {
             "first_token_accuracy": prompt_first_correct / prompt_first_total,

@@ -89,3 +89,23 @@ def test_unconditional_has_fixed_prepared_batch_shape_in_train_and_generation(
         assert batch.source_attention_mask.shape == batch.input_ids.shape
     else:
         assert batch.labels.shape == batch.input_ids.shape
+
+
+def test_training_forces_right_padding_even_if_loaded_tokenizer_was_left_padded(tokenizer):
+    tokenizer.padding_side = "left"
+    varied = {
+        "source": ["1", "1 2 3 4"],
+        "target": ["-1 1", "i -1 1 -2 2"],
+        "pattern_id": [0, 1],
+    }
+    batch = prepare_batch(
+        "cpu", varied, tokenizer, True, 32, 16, False, "pattern",
+        condition_delimiter="COND",
+    )
+
+    assert tokenizer.padding_side == "left"
+    assert batch.input_ids[0, 0] != tokenizer.pad_token_id
+    assert batch.input_ids[0, -1] == tokenizer.pad_token_id
+    for row, target in enumerate(varied["target"]):
+        active_labels = [value for value in batch.labels[row].tolist() if value != -100]
+        assert tokenizer.convert_ids_to_tokens(active_labels) == target.split() + ["END"]

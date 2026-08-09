@@ -549,6 +549,8 @@ def run_grpo(config, args) -> Path:
         max_steps=args.max_steps,
     )
     train_grpo(trainer, resume_checkpoint=args.resume_checkpoint)
+    tokenizer.padding_side = "right"
+    tokenizer.backend_tokenizer.no_padding()
     evaluation_checkpoint = output / f"evaluation-step-{int(trainer.state.global_step)}"
     return save_reproduction_checkpoint(
         evaluation_checkpoint,

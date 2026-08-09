@@ -167,6 +167,7 @@ def create_reproduction_tokenizer(nentity: int, nrelation: int):
         unk_token="UNK",
         sep_token="SEP",
         additional_special_tokens=["COND"],
+        padding_side="right",
     )
     actual_ids = sorted(tokenizer.get_vocab().values())
     if actual_ids != list(range(len(tokenizer))):
@@ -259,26 +260,27 @@ def prepare_batch(
         ).input_ids.to(device)
         source_attention_mask = prompt_tokens.attention_mask
     else:
-        pair_tokens = tokenizer(
-            prompts,
-            target,
-            padding="longest",
-            truncation=True,
-            max_length=src_len + tgt_len,
-            return_tensors="pt",
-        ).to(device)
-        labels = pair_tokens.input_ids.clone()
-        prompt_tokens_for_mask = tokenizer(
-            prompts,
-            padding="max_length",
-            truncation=True,
-            max_length=labels.shape[-1],
-            return_tensors="pt",
-        ).to(device)
-        labels[prompt_tokens_for_mask.attention_mask == 1] = tokenizer.pad_token_id
-        if is_gen:
-            old_padding_side = tokenizer.padding_side
-            try:
+        old_padding_side = tokenizer.padding_side
+        try:
+            tokenizer.padding_side = "right"
+            pair_tokens = tokenizer(
+                prompts,
+                target,
+                padding="longest",
+                truncation=True,
+                max_length=src_len + tgt_len,
+                return_tensors="pt",
+            ).to(device)
+            labels = pair_tokens.input_ids.clone()
+            prompt_tokens_for_mask = tokenizer(
+                prompts,
+                padding="max_length",
+                truncation=True,
+                max_length=labels.shape[-1],
+                return_tensors="pt",
+            ).to(device)
+            labels[prompt_tokens_for_mask.attention_mask == 1] = tokenizer.pad_token_id
+            if is_gen:
                 tokenizer.padding_side = "left"
                 prompt_tokens = tokenizer(
                     prompts,
@@ -287,15 +289,19 @@ def prepare_batch(
                     max_length=src_len,
                     return_tensors="pt",
                 ).to(device)
-            finally:
-                tokenizer.padding_side = old_padding_side
-            input_ids = prompt_tokens.input_ids
-            attention_mask = prompt_tokens.attention_mask
-            source_attention_mask = prompt_tokens.attention_mask
-        else:
-            input_ids = pair_tokens.input_ids
-            attention_mask = pair_tokens.attention_mask
-            source_attention_mask = prompt_tokens_for_mask.attention_mask
+                input_ids = prompt_tokens.input_ids
+                attention_mask = prompt_tokens.attention_mask
+                source_attention_mask = prompt_tokens.attention_mask
+            else:
+                input_ids = pair_tokens.input_ids
+                attention_mask = pair_tokens.attention_mask
+                source_attention_mask = prompt_tokens_for_mask.attention_mask
+        finally:
+            tokenizer.padding_side = old_padding_side
+            # Fast tokenizers keep the most recent padding direction in the
+            # Rust backend.  Clear it so save_pretrained cannot serialize a
+            # transient generation-only left-padding state.
+            tokenizer.backend_tokenizer.no_padding()
 
     labels[labels == tokenizer.pad_token_id] = -100
     return PreparedBatch(

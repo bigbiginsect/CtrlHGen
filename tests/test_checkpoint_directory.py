@@ -4,7 +4,7 @@ torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
 pytest.importorskip("tokenizers")
 
-from akgr.tokenizer import create_reproduction_tokenizer
+from akgr.tokenizer import create_reproduction_tokenizer, prepare_batch
 from akgr.utils.load_util import load_reproduction_checkpoint, save_reproduction_checkpoint
 
 
@@ -40,6 +40,9 @@ def test_checkpoint_parent_resume_and_test_semantics(tmp_path):
     )
     loaded = load_reproduction_checkpoint(target, mode="test")
     assert loaded.metadata["global_step"] == 3
+    assert loaded.metadata["format_version"] == 2
+    assert loaded.metadata["tokenizer_contract"]["pair_ends_with_eos"] is True
+    assert loaded.tokenizer.padding_side == "right"
     assert loaded.model.config.n_layer == 1
     assert (target / "model" / "model.safetensors").is_file()
     assert not (target / "model_state.pt").exists()
@@ -54,6 +57,37 @@ def test_checkpoint_parent_resume_and_test_semantics(tmp_path):
     )
     assert resumed_optimizer.param_groups[0]["lr"] == optimizer.param_groups[0]["lr"]
     assert resumed.metadata["stage_epoch"] == 1
+
+
+def test_checkpoint_round_trip_cannot_persist_generation_left_padding(tmp_path):
+    model, tokenizer, optimizer, scheduler = _objects()
+    varied = {
+        "source": ["1", "1 2 3"],
+        "target": ["-1 1", "i -1 1 -2 2"],
+        "pattern_id": [0, 1],
+    }
+    prepare_batch(
+        "cpu", varied, tokenizer, True, 32, 16, True, "pattern",
+        condition_delimiter="COND",
+    )
+    target = tmp_path / "checkpoint"
+    save_reproduction_checkpoint(
+        target, model=model, tokenizer=tokenizer,
+        stage="unconditional", stage_epoch=1, global_step=1,
+        condition="unconditional", experiment_config={},
+        experiment_config_hash="abc", seed=42,
+        optimizer=optimizer, scheduler=scheduler,
+    )
+
+    loaded = load_reproduction_checkpoint(target, mode="test")
+    assert loaded.tokenizer.padding_side == "right"
+    batch = prepare_batch(
+        "cpu", varied, loaded.tokenizer, True, 32, 16, False, "pattern",
+        condition_delimiter="COND",
+    )
+    for row, expected in enumerate(varied["target"]):
+        active = [value for value in batch.labels[row].tolist() if value != -100]
+        assert loaded.tokenizer.convert_ids_to_tokens(active) == expected.split() + ["END"]
 
 
 def test_resume_rejects_wrong_stage_or_missing_optimizer(tmp_path):

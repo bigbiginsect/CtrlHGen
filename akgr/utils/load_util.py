@@ -206,7 +206,7 @@ def save_model(path, contents:str,
         exit()
 
 
-CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_FORMAT_VERSION = 2
 
 
 @dataclass
@@ -258,6 +258,17 @@ def _model_config_hash(config) -> str:
     return _json_sha256(payload)
 
 
+def _tokenizer_contract(tokenizer) -> dict:
+    probe = tokenizer("1", "-1 1", add_special_tokens=True)["input_ids"]
+    return {
+        "padding_side": tokenizer.padding_side,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+        "sep_token_id": tokenizer.sep_token_id,
+        "pair_ends_with_eos": bool(probe and probe[-1] == tokenizer.eos_token_id),
+    }
+
+
 def save_reproduction_checkpoint(
     path,
     *,
@@ -282,9 +293,19 @@ def save_reproduction_checkpoint(
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
     try:
+        if tokenizer.padding_side != "right":
+            raise ValueError("Reproduction checkpoints require tokenizer.padding_side='right'")
+        contract = _tokenizer_contract(tokenizer)
+        if not contract["pair_ends_with_eos"]:
+            raise ValueError("Tokenizer pair encoding must append EOS before checkpointing")
+        tokenizer.backend_tokenizer.no_padding()
+        tokenizer.init_kwargs["padding_side"] = "right"
         model.config.to_json_file(temporary / "config.json")
         model.save_pretrained(temporary / "model", safe_serialization=True)
         tokenizer.save_pretrained(temporary / "tokenizer")
+        tokenizer_json_hash = hashlib.sha256(
+            (temporary / "tokenizer" / "tokenizer.json").read_bytes()
+        ).hexdigest()
         metadata = {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "stage": stage,
@@ -298,6 +319,8 @@ def save_reproduction_checkpoint(
             "data_manifest_hash": data_manifest_hash,
             "model_config_hash": _model_config_hash(model.config),
             "tokenizer_vocab_hash": _json_sha256(tokenizer.get_vocab()),
+            "tokenizer_json_hash": tokenizer_json_hash,
+            "tokenizer_contract": contract,
         }
         (temporary / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -371,6 +394,13 @@ def load_reproduction_checkpoint(
         raise ValueError("Loaded model config does not match checkpoint metadata")
     if _json_sha256(tokenizer.get_vocab()) != metadata["tokenizer_vocab_hash"]:
         raise ValueError("Loaded tokenizer vocab does not match checkpoint metadata")
+    tokenizer_json_hash = hashlib.sha256((root / "tokenizer" / "tokenizer.json").read_bytes()).hexdigest()
+    if tokenizer_json_hash != metadata["tokenizer_json_hash"]:
+        raise ValueError("Loaded tokenizer serialization does not match checkpoint metadata")
+    if _tokenizer_contract(tokenizer) != metadata["tokenizer_contract"]:
+        raise ValueError("Loaded tokenizer does not satisfy the checkpoint tokenizer contract")
+    if tokenizer.padding_side != "right":
+        raise ValueError("Loaded reproduction tokenizer must use right padding for training")
     if mode == "resume":
         if optimizer is None or scheduler is None:
             raise ValueError("resume mode requires an instantiated optimizer and scheduler")
