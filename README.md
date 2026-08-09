@@ -94,20 +94,21 @@ CONFIG=akgr/configs/reproduce/wn-pattern-tiny.yml
 bash scripts/reproduce/sample.sh "$CONFIG"
 bash scripts/reproduce/sft-unconditional.sh "$CONFIG"
 
-UNCONDITIONAL_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny/unconditional-epoch-1
+UNCONDITIONAL_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny-v2/unconditional-best
 bash scripts/reproduce/sft-conditional.sh \
   "$CONFIG" "$UNCONDITIONAL_CHECKPOINT"
 
-CONDITIONAL_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny/conditional-epoch-1
+CONDITIONAL_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny-v2/conditional-best
 bash scripts/reproduce/evaluate.sh "$CONFIG" "$CONDITIONAL_CHECKPOINT"
 bash scripts/reproduce/grpo.sh "$CONFIG" "$CONDITIONAL_CHECKPOINT"
 
-GRPO_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny/grpo/evaluation-step-<global-step>
+GRPO_CHECKPOINT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-tiny-v2/grpo/evaluation-step-<global-step>
 bash scripts/reproduce/evaluate.sh "$CONFIG" "$GRPO_CHECKPOINT"
 ```
 
-Checkpoint paths are intentionally explicit.  Conditional SFT and GRPO use a
-parent checkpoint; evaluation loads only the checkpoint being evaluated.  The
+Checkpoint paths are intentionally explicit.  Conditional SFT and GRPO accept
+only the selected checkpoint that passed the configured parse/EOS health gate;
+evaluation can load any compatible checkpoint.  The
 tiny profile is a smoke test, not a paper-result reproduction.  Only after it
 passes should `wn-pattern-small.yml` be considered for a scaled experiment.
 The `full` profile reflects an author-code scale clue and must not be presented
@@ -115,15 +116,19 @@ as a fully disclosed paper setting.
 
 ## Phase C/D checkpoint and validation policy
 
-The `small` profile validates SFT every two stage epochs with deterministic
+The `small` profile keeps the paper SFT schedule (400 unconditional epochs with
+50 warm-up epochs, then 50 conditional epochs with 5 warm-up epochs) while
+scaling the per-pattern data to 1024/128/128.  It validates every ten stage
+epochs with deterministic
 greedy decoding.  It writes every validation prediction and aggregate metric
-under `$CTRLHGEN_RUN_ROOT/repro-wn-pattern-small/validation/`, plus an append-only
-stage history JSONL.  Unconditional SFT selects the lowest validation loss
-(Jaccard tie-break); conditional SFT selects the highest validation Pattern
-Accuracy (Jaccard, then validation-loss tie-breaks).  Selection never reads the
-test split.
+under `$CTRLHGEN_RUN_ROOT/repro-wn-pattern-small-v2/validation/`, plus an
+append-only stage history JSONL.  A candidate must first reach 90% parseability
+and 98% EOS emission.  Unconditional selection then prioritizes parseability,
+Jaccard, and validation loss; conditional selection prioritizes Pattern
+Accuracy, parseability, Jaccard, and validation loss.  Selection never reads
+the test split.
 
-SFT makes a periodic checkpoint every five stage epochs and also saves a newly
+Small-profile SFT makes a periodic checkpoint every 25 stage epochs and also saves a newly
 selected best checkpoint.  Pruning retains the two newest checkpoints and the
 current best; the configured final epoch is always saved.  The selected model
 is exposed as `unconditional-best.json`/`conditional-best.json` and a matching
@@ -131,6 +136,27 @@ directory symlink in the experiment checkpoint root.  Phase D GRPO saves every
 100 optimizer steps and retains the latest two resumable Trainer checkpoints.
 The `tiny` and `full` profiles use the same policy with cadence values scaled
 for smoke testing and longer training, respectively.
+
+Conditional prompts have the fixed token contract
+`answers COND condition SEP target END`; `SEP` is never reused as the condition
+delimiter.  Training pair batches always use right padding, while left padding
+is scoped only to generation.  Reproduction checkpoint format v2 records and
+hashes this tokenizer contract, so checkpoints created before the padding fix
+are rejected instead of silently training on prompt tokens with `END` masked.
+
+For a read-only checkpoint audit that compares teacher-forced next-token
+predictions, prompt-only logits, and greedy generation on the same examples:
+
+```bash
+python -m akgr.abduction_model.sft_diagnostics \
+  --experiment-config akgr/configs/diagnostics/wn-pattern-overfit.yml \
+  --checkpoint /path/to/checkpoint --split train
+```
+
+Configuration identity is separated into a full experiment `semantic_hash`, a
+sampled-data `data_hash`, and a KG split `kg_hash`.  Training-budget changes no
+longer rebuild an identical KG or resample identical examples, while checkpoint
+compatibility still requires the exact full experiment configuration.
 
 Seeded CUDA runs may warn that CuBLAS or memory-efficient attention is not
 bitwise deterministic.  These warnings do not invalidate training, but exact

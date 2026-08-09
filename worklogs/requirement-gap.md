@@ -1,8 +1,8 @@
 # CtrlHGen 复现 Requirement Gap 与后续执行交接
 
-> 状态日期：2026-08-08（Asia/Shanghai）
+> 状态日期：2026-08-10（Asia/Shanghai）
 >
-> 当前代码提交：`0225585dc897455b2c216da26f9ace1adc588415`
+> 当前维护分支：`codex/reproduction-pipeline`（运行前以 `git rev-parse HEAD` 记录精确 SHA）
 > 文档目的：说明“当前代码距离跑通和满足导师复现要求还缺什么”，并让后续 agent 不必重新调查即可继续实施。
 
 ## 1. 任务目标与推荐结论
@@ -20,6 +20,31 @@
 5. 如果预算只够完成一个阶段，最低可交付是 Table 3 的 `CtrlHG (w/o RL)` 行对应的缩小规模 SFT-only 指标；更稳妥的交付是再加入 GRPO，并复现“GRPO 提升条件遵循率”的趋势。
 
 这里的“复现”应表述为：**在明确列出的缩放设置下复现实验流程、指标计算和关键趋势**。除非以后使用完整论文设置并做多随机种子实验，否则不要声称复现了论文的绝对数值。
+
+### 1.1 2026-08-10 Phase C 失败的根因与处置
+
+失败 run：`/mnt/workspace/ctrlhgen-runs/repro-wn-pattern-phase-c-seed42-20260809-111557`。
+最初观察到无条件 best 的验证 parse 约 11%，conditional 与 test 则是 0% EOS、0% parse。训练预算不足确实解释了无条件模型较弱，但**不是 conditional 永不停止的根因**。
+
+已用完整 12 层模型、真实 WN18RR 数据和 checkpoint round-trip 复现并定位：
+
+1. validation generation 临时把 fast tokenizer 切为 left padding。Python 属性虽然恢复为 right，Rust backend 仍保留最后一次 left-padding 状态；紧接着 `save_pretrained()` 把它写入了 tokenizer JSON。
+2. conditional 从无条件 checkpoint 加载后得到 left-padding tokenizer。训练 pair 和用于 label mask 的 prompt 都左对齐，但长度不同，mask 因而覆盖 target 与 `END`，反而把 source/condition 留成 active labels。
+3. 直接检查旧 conditional checkpoint 的 16 条训练 batch 得到 `eos labels = 0`；即使训练 100 epoch、loss 降到 `0.006`，greedy 仍必然是 0% EOS。这证明继续加 epoch 无法修复该 run。
+4. 修复后，每条 active label 严格等于 `target + END`。相同的 104 条真实数据诊断中，conditional 从 epoch 5 起 EOS rate 即为 100%；最终 checkpoint 在训练集上 teacher-forced token/sequence/EOS accuracy、prompt-only first-token accuracy、greedy parse 与 greedy EOS 全为 100%。
+
+配套修正包括：
+
+- 条件分隔符改为独立 `COND`，固定序列为 `answers COND condition SEP target END`；
+- training batch 强制 right padding，generation-only left padding 不得污染 backend；
+- checkpoint format v2 哈希 tokenizer JSON 并校验 padding、SEP、EOS pair 模板，旧 checkpoint 会被拒绝；
+- validation 记录 EOS rate、生成长度和 max-length rate，未过 parse/EOS 门槛的 checkpoint 不能成为 best，也不能进入下一阶段或 GRPO；
+- best 选择优先 generation-level parse/condition 指标，不再让低 validation loss 单独选中不可用模型；
+- 无条件阶段使用 merged augmentation，conditional/GRPO 使用按 pattern 平衡的 base train；
+- `semantic_hash`、`data_hash`、`kg_hash` 分离，改训练预算不再重建完全相同的数据；
+- small 配置恢复论文的 400+50 epoch SFT 日程，只缩放每 pattern 样本数，避免同时缩数据和缩优化步数。
+
+因此，旧 Phase C checkpoint **不可续训或用于 Phase D**。必须从 format-v2 无条件模型重新开始；正式 small run 先以 greedy validation 的 `parse_ok >= 0.90`、`eos_rate >= 0.98` 为阶段门槛。
 
 ## 2. 已核实的当前状态
 
@@ -85,7 +110,7 @@ DSW 规划的持久化目录 `/mnt/workspace/ctrlhgen-data` 和 `/mnt/workspace/
 | 模型 | 12 层 decoder-only | 优先保留 12 层 | 保持层数；显存不足再讨论 |
 | optimizer | AdamW | AdamW | 保持一致 |
 | effective batch | SFT 256，RL 32 | 尽量保持；用 micro-batch + gradient accumulation | 保持有效 batch |
-| SFT epoch | 400 + 50 | 初始建议 20 + 10，按 smoke 吞吐量确认 | 明确为缩放设置 |
+| SFT epoch | 400 + 50 | 400 + 50；只缩样本规模，不再同时缩优化日程 | 保持论文日程 |
 | GRPO group size | 4 | 4 | 保持一致 |
 | GRPO epoch | 论文正文未完整披露 | 初始 1–3 | 明确记录 |
 | GPU | 4×A6000 48GB | 1×L20 46GB | 明确为硬件差异 |

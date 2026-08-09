@@ -1,6 +1,6 @@
 schema_version: 1
 experiment:
-  name: diagnostic-wn-pattern-overfit-v6
+  name: diagnostic-wn-pattern-overfit-v7
   dataset: WN18RR
   profile: diagnostic
   seed: 42
@@ -35,7 +35,7 @@ training:
   validation:
     every_epochs: 5
     batch_size: 8
-    min_parse_ok: 0.50
+    min_parse_ok: 0.40
     min_eos_rate: 0.95
   checkpoint:
     every_epochs: 10
