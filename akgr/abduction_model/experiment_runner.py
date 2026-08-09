@@ -96,7 +96,7 @@ def _graph_samplers(config):
         seed=config.seed,
         split_ratios=data["split_ratios"],
         reverse_edges_flag=data["reverse_edges"],
-        semantic_hash=config.semantic_hash,
+        semantic_hash=config.kg_hash,
         offline=True,
     ).graph_samplers
 

@@ -104,10 +104,12 @@ def create_reproduction_dataset(
     with manifest_path.open(encoding='utf-8') as handle:
         manifest = json.load(handle)
     expected = {
+        'schema_version': 2,
         'dataset': experiment_config.dataset,
         'profile': experiment_config.experiment['profile'],
         'seed': experiment_config.seed,
-        'semantic_hash': experiment_config.semantic_hash,
+        'data_hash': experiment_config.data_hash,
+        'kg_hash': experiment_config.kg_hash,
     }
     for key, value in expected.items():
         if manifest.get(key) != value:

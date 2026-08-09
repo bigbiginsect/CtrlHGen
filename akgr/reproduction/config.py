@@ -106,12 +106,42 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _data_identity(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only fields that can change sampled examples or the KG split."""
+    experiment = raw["experiment"]
+    return {
+        "schema_version": raw["schema_version"],
+        "experiment": {
+            "dataset": experiment["dataset"],
+            "profile": experiment["profile"],
+            "seed": experiment["seed"],
+        },
+        "data": raw["data"],
+        "sampling": raw["sampling"],
+        "augmentation": raw["augmentation"],
+    }
+
+
+def _kg_identity(raw: Mapping[str, Any]) -> dict[str, Any]:
+    experiment = raw["experiment"]
+    data = raw["data"]
+    return {
+        "schema_version": raw["schema_version"],
+        "dataset": experiment["dataset"],
+        "seed": experiment["seed"],
+        "split_ratios": data["split_ratios"],
+        "reverse_edges": data["reverse_edges"],
+    }
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     source_path: Path
     raw: dict[str, Any]
     runtime_paths: dict[str, Path]
     semantic_hash: str
+    data_hash: str
+    kg_hash: str
 
     @property
     def experiment(self) -> dict[str, Any]:
@@ -136,7 +166,7 @@ class ExperimentConfig:
             / self.dataset
             / str(self.experiment["profile"])
             / f"seed-{self.seed}"
-            / self.semantic_hash[:12]
+            / self.data_hash[:12]
         )
 
     @property
@@ -147,6 +177,8 @@ class ExperimentConfig:
         resolved = dict(self.raw)
         resolved["runtime_paths"] = {key: str(path) for key, path in self.runtime_paths.items()}
         resolved["semantic_hash"] = self.semantic_hash
+        resolved["data_hash"] = self.data_hash
+        resolved["kg_hash"] = self.kg_hash
         resolved["source_path"] = str(self.source_path)
         return resolved
 
@@ -264,4 +296,11 @@ def load_experiment_config(path: os.PathLike[str] | str, env: Mapping[str, str] 
     if missing:
         raise ValueError(f"Missing runtime path environment variables: {', '.join(missing)}")
     runtime_paths = {key: Path(environment[name]).expanduser().resolve() for key, name in ROOT_ENV.items()}
-    return ExperimentConfig(source_path=source, raw=raw, runtime_paths=runtime_paths, semantic_hash=_canonical_hash(raw))
+    return ExperimentConfig(
+        source_path=source,
+        raw=raw,
+        runtime_paths=runtime_paths,
+        semantic_hash=_canonical_hash(raw),
+        data_hash=_canonical_hash(_data_identity(raw)),
+        kg_hash=_canonical_hash(_kg_identity(raw)),
+    )

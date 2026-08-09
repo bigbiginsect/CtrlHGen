@@ -114,7 +114,7 @@ def test_real_data_overfit_diagnostic_is_isolated_from_reproduction_profiles() -
     config = load_experiment_config(path, env=RUNTIME_ENV)
 
     assert config.experiment["profile"] == "diagnostic"
-    assert config.experiment["name"] == "diagnostic-wn-pattern-overfit-v3"
+    assert config.experiment["name"] == "diagnostic-wn-pattern-overfit-v4"
     assert config.raw["training"]["gradient_accumulation_steps"] == 1
     assert config.raw["generation"]["do_sample"] is False
 
@@ -132,7 +132,31 @@ def test_runtime_paths_do_not_change_the_semantic_hash() -> None:
     )
 
     assert first.semantic_hash == second.semantic_hash
+    assert first.data_hash == second.data_hash
+    assert first.kg_hash == second.kg_hash
     assert first.runtime_paths != second.runtime_paths
+
+
+def test_training_changes_do_not_change_sampled_data_identity(tmp_path: Path) -> None:
+    original = load_experiment_config(CONFIG_PATHS["tiny"], env=RUNTIME_ENV)
+    raw = yaml.safe_load(CONFIG_PATHS["tiny"].read_text(encoding="utf-8"))
+    raw["experiment"]["name"] = "same-data-new-training"
+    raw["training"]["unconditional"]["epochs"] = 2
+    changed_path = tmp_path / "changed-training.yml"
+    changed_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    changed = load_experiment_config(changed_path, env=RUNTIME_ENV)
+
+    assert changed.semantic_hash != original.semantic_hash
+    assert changed.data_hash == original.data_hash
+    assert changed.kg_hash == original.kg_hash
+    assert changed.artifact_dir == original.artifact_dir
+
+    raw["sampling"]["train_per_pattern"] = 9
+    data_changed_path = tmp_path / "changed-data.yml"
+    data_changed_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    data_changed = load_experiment_config(data_changed_path, env=RUNTIME_ENV)
+    assert data_changed.data_hash != original.data_hash
+    assert data_changed.kg_hash == original.kg_hash
 
 
 def test_config_rejects_unknown_keys(tmp_path: Path) -> None:

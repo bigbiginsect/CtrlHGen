@@ -1,6 +1,6 @@
 schema_version: 1
 experiment:
-  name: diagnostic-wn-pattern-overfit-v3
+  name: diagnostic-wn-pattern-overfit-v4
   dataset: WN18RR
   profile: diagnostic
   seed: 42

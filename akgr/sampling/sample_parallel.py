@@ -274,7 +274,8 @@ def sample_dataset(
     dataset: str,
     profile: str,
     seed: int,
-    semantic_hash: str | None,
+    data_hash: str | None,
+    kg_hash: str | None,
     data_root: Path,
     artifact_dir: Path | None = None,
     manifest_filename: str = "sampling-manifest.json",
@@ -295,7 +296,7 @@ def sample_dataset(
         data_root=data_root,
         seed=seed,
         split_ratios=tuple(split_ratios),
-        semantic_hash=semantic_hash,
+        semantic_hash=kg_hash,
     )
     pattern_table_path = Path(pattern_table_file).expanduser().resolve()
     patterns = _patterns(str(pattern_table_path))
@@ -374,11 +375,12 @@ def sample_dataset(
         "merged": {"train": _artifact(merged_path, output_dir, len(merged))},
     }
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": dataset,
         "profile": profile,
         "seed": int(seed),
-        "semantic_hash": semantic_hash,
+        "data_hash": data_hash,
+        "kg_hash": kg_hash,
         "stats": {"nentity": kg.num_ent, "nrelation": kg.num_rel},
         "artifacts": artifacts,
         "kg": _kg_audit(kg, output_dir),
@@ -428,6 +430,8 @@ def _strict_main(experiment_config: str) -> None:
         "pid": os.getpid(),
         "command": [sys.executable, "-m", "akgr.sampling.sample_parallel", "--experiment-config", str(config.source_path)],
         "semantic_hash": config.semantic_hash,
+        "data_hash": config.data_hash,
+        "kg_hash": config.kg_hash,
         "artifact_dir": str(config.artifact_dir),
     }
     status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -437,7 +441,8 @@ def _strict_main(experiment_config: str) -> None:
             dataset=config.dataset,
             profile=raw["experiment"]["profile"],
             seed=config.seed,
-            semantic_hash=config.semantic_hash,
+            data_hash=config.data_hash,
+            kg_hash=config.kg_hash,
             data_root=config.runtime_paths["data_root"],
             artifact_dir=config.artifact_dir,
             counts={
@@ -506,7 +511,8 @@ def _legacy_main(args: argparse.Namespace) -> None:
             dataset=dataset,
             profile=args.scale,
             seed=args.seed,
-            semantic_hash=None,
+            data_hash=None,
+            kg_hash=None,
             data_root=Path(args.data_root).expanduser().resolve(),
             manifest_filename=f"{dataset}-{args.scale}-seed{args.seed}-sample-manifest.json",
             counts=explicit,

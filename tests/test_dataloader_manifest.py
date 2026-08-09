@@ -41,11 +41,12 @@ def test_manifest_loader_selects_merged_train_and_base_validation(tmp_path, monk
     train_augmented = _write_jsonl(config.artifact_dir / "train-augmented.jsonl", [augmented])
     train_merged = _write_jsonl(config.artifact_dir / "train-merged.jsonl", [base, augmented])
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": config.dataset,
         "profile": config.experiment["profile"],
         "seed": config.seed,
-        "semantic_hash": config.semantic_hash,
+        "data_hash": config.data_hash,
+        "kg_hash": config.kg_hash,
         "stats": {"nentity": 10, "nrelation": 4},
         "artifacts": {
             "base": {"train": train_base, "valid": valid_base, "test": test_base},
@@ -82,11 +83,12 @@ def test_manifest_loader_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
     artifact_path = config.artifact_dir / "train-merged.jsonl"
     artifact_path.write_text("{}\n", encoding="utf-8")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": config.dataset,
         "profile": config.experiment["profile"],
         "seed": config.seed,
-        "semantic_hash": config.semantic_hash,
+        "data_hash": config.data_hash,
+        "kg_hash": config.kg_hash,
         "stats": {"nentity": 1, "nrelation": 1},
         "artifacts": {
             "base": {},

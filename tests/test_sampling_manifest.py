@@ -58,7 +58,8 @@ def test_sample_manifest_schema_and_profile_counts(monkeypatch, tmp_path):
         dataset="WN18RR",
         profile="tiny",
         seed=42,
-        semantic_hash="config-hash",
+        data_hash="data-hash",
+        kg_hash="kg-hash",
         data_root=tmp_path,
         counts={"train": 8, "valid": 2, "test": 2},
         max_answers=32,
@@ -72,9 +73,12 @@ def test_sample_manifest_schema_and_profile_counts(monkeypatch, tmp_path):
     )
     manifest = json.loads(manifest_path.read_text())
     assert set(manifest) == {
-        "schema_version", "dataset", "profile", "seed", "semantic_hash", "stats", "artifacts",
+        "schema_version", "dataset", "profile", "seed", "data_hash", "kg_hash", "stats", "artifacts",
         "kg", "pattern_table", "augmentation",
     }
+    assert manifest["schema_version"] == 2
+    assert manifest["data_hash"] == "data-hash"
+    assert manifest["kg_hash"] == "kg-hash"
     assert manifest["artifacts"]["base"]["train"]["count"] == 13 * 8
     assert manifest["artifacts"]["base"]["valid"]["count"] == 13 * 2
     assert manifest["artifacts"]["base"]["test"]["count"] == 13 * 2
@@ -124,7 +128,7 @@ def test_strict_sampling_run_writes_snapshots_and_completed_status(monkeypatch, 
     status = json.loads((run_dir / "status.json").read_text())
     assert status["status"] == "completed"
     assert status["sampling_manifest"]["sha256"] == hashlib.sha256(
-        (tmp_path / "data" / "WN18RR" / "tiny" / "seed-42" / status["semantic_hash"][:12] / "sampling-manifest.json").read_bytes()
+        (tmp_path / "data" / "WN18RR" / "tiny" / "seed-42" / status["data_hash"][:12] / "sampling-manifest.json").read_bytes()
     ).hexdigest()
 
 
