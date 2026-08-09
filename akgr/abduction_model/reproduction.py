@@ -54,17 +54,18 @@ def epoch_due(stage_epoch: int, final_epoch: int, every_epochs: int) -> bool:
 def validation_selection_key(stage: str, record: dict) -> tuple[float, ...]:
     """Return the fixed model-selection ordering for one SFT stage."""
     validation_loss = float(record["validation_loss"])
+    parse_ok = float(record.get("parse_ok") or 0.0)
     jaccard = float(record.get("jaccard") or 0.0)
     if stage == "unconditional":
-        return (-validation_loss, jaccard)
+        return (parse_ok, jaccard, -validation_loss)
     if stage == "conditional":
         condition_accuracy = float(record.get("condition_accuracy") or 0.0)
-        return (condition_accuracy, jaccard, -validation_loss)
+        return (condition_accuracy, parse_ok, jaccard, -validation_loss)
     raise ValueError(f"Unknown SFT stage: {stage!r}")
 
 
 def is_better_validation(stage: str, candidate: dict, current: dict | None) -> bool:
-    """Select lower loss for unconditional and condition adherence for conditional."""
+    """Select only healthy checkpoints, prioritizing generation-level quality."""
     if candidate.get("health_pass") is False:
         return False
     if current is None:
@@ -92,9 +93,12 @@ def write_best_checkpoint_pointer(path, *, checkpoint: Path, record: dict) -> Pa
         "checkpoint": checkpoint.name,
         "best_checkpoint": best_link.name,
         "selection": (
-            ["validation_loss:min", "jaccard:max"]
+            ["parse_ok:max", "jaccard:max", "validation_loss:min"]
             if record["stage"] == "unconditional"
-            else ["condition_accuracy:max", "jaccard:max", "validation_loss:min"]
+            else [
+                "condition_accuracy:max", "parse_ok:max", "jaccard:max",
+                "validation_loss:min",
+            ]
         ),
         "validation": record,
     }

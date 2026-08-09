@@ -37,6 +37,11 @@ def test_stage_specific_best_validation_selection():
     assert not is_better_validation(
         "unconditional", {"validation_loss": 2.1, "jaccard": 1.0}, unconditional
     )
+    assert is_better_validation(
+        "unconditional",
+        {"validation_loss": 9.0, "parse_ok": 0.8, "jaccard": 0.0},
+        {"validation_loss": 1.0, "parse_ok": 0.7, "jaccard": 1.0},
+    )
 
     conditional = {
         "validation_loss": 2.0,
@@ -79,7 +84,7 @@ def test_best_pointer_and_retention_keep_best_plus_latest(tmp_path):
     )
     payload = json.loads(pointer.read_text())
     assert payload["checkpoint"] == "unconditional-epoch-2"
-    assert payload["selection"] == ["validation_loss:min", "jaccard:max"]
+    assert payload["selection"] == ["parse_ok:max", "jaccard:max", "validation_loss:min"]
     assert (tmp_path / "unconditional-best").resolve() == (
         tmp_path / "unconditional-epoch-2"
     ).resolve()

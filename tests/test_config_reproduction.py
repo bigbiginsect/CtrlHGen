@@ -114,7 +114,7 @@ def test_real_data_overfit_diagnostic_is_isolated_from_reproduction_profiles() -
     config = load_experiment_config(path, env=RUNTIME_ENV)
 
     assert config.experiment["profile"] == "diagnostic"
-    assert config.experiment["name"] == "diagnostic-wn-pattern-overfit-v2"
+    assert config.experiment["name"] == "diagnostic-wn-pattern-overfit-v3"
     assert config.raw["training"]["gradient_accumulation_steps"] == 1
     assert config.raw["generation"]["do_sample"] is False
 
