@@ -49,7 +49,9 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
         "n_head": 12,
         "n_positions": 1024,
         "n_ctx": 1024,
+        "tie_word_embeddings": True,
     }
+    assert config.raw["tokenizer"] == {"condition_delimiter": "COND"}
     assert config.raw["augmentation"] == {
         "enabled": True,
         "splits": ["train"],
@@ -65,17 +67,26 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
     }
     expected_runtime_policy = {
         "tiny": {
-            "validation": {"every_epochs": 1, "batch_size": 4},
+            "validation": {
+                "every_epochs": 1, "batch_size": 4,
+                "min_parse_ok": 0.0, "min_eos_rate": 0.0,
+            },
             "checkpoint": {"every_epochs": 1, "keep_last": 2},
             "grpo_save": (10, 2),
         },
         "small": {
-            "validation": {"every_epochs": 2, "batch_size": 16},
-            "checkpoint": {"every_epochs": 5, "keep_last": 2},
+            "validation": {
+                "every_epochs": 10, "batch_size": 16,
+                "min_parse_ok": 0.9, "min_eos_rate": 0.98,
+            },
+            "checkpoint": {"every_epochs": 25, "keep_last": 2},
             "grpo_save": (100, 2),
         },
         "full": {
-            "validation": {"every_epochs": 10, "batch_size": 16},
+            "validation": {
+                "every_epochs": 10, "batch_size": 16,
+                "min_parse_ok": 0.9, "min_eos_rate": 0.98,
+            },
             "checkpoint": {"every_epochs": 25, "keep_last": 2},
             "grpo_save": (500, 2),
         },
@@ -86,6 +97,26 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
         config.raw["grpo"]["save_steps"],
         config.raw["grpo"]["save_total_limit"],
     ) == expected_runtime_policy["grpo_save"]
+    assert config.raw["training"]["unconditional"]["data_variant"] == "merged"
+    assert config.raw["training"]["conditional"]["data_variant"] == "base"
+    assert config.raw["grpo"]["data_variant"] == "base"
+    if profile in {"small", "full"}:
+        assert (
+            config.raw["training"]["unconditional"]["epochs"],
+            config.raw["training"]["unconditional"]["warmup_epochs"],
+            config.raw["training"]["conditional"]["epochs"],
+            config.raw["training"]["conditional"]["warmup_epochs"],
+        ) == (400, 50, 50, 5)
+
+
+def test_real_data_overfit_diagnostic_is_isolated_from_reproduction_profiles() -> None:
+    path = REPO_ROOT / "akgr" / "configs" / "diagnostics" / "wn-pattern-overfit.yml"
+    config = load_experiment_config(path, env=RUNTIME_ENV)
+
+    assert config.experiment["profile"] == "diagnostic"
+    assert config.experiment["name"] == "diagnostic-wn-pattern-overfit-v2"
+    assert config.raw["training"]["gradient_accumulation_steps"] == 1
+    assert config.raw["generation"]["do_sample"] is False
 
 
 def test_runtime_paths_do_not_change_the_semantic_hash() -> None:

@@ -54,13 +54,14 @@ def _require_cuda(stage: str) -> torch.device:
     return device
 
 
-def _datasets(config, splits):
+def _datasets(config, splits, *, train_variant="base"):
     patterns = pd.read_csv("akgr/metadata/pattern_filtered.csv", index_col="id")
     return create_reproduction_dataset(
         experiment_config=config,
         pattern_filtered=patterns,
         splits=splits,
         is_act=True,
+        train_variant=train_variant,
     )
 
 
@@ -108,6 +109,24 @@ def _file_sha256(path):
     return digest.hexdigest()
 
 
+def _require_selected_healthy_checkpoint(path, *, stage: str) -> Path:
+    """Require stage transitions to use the gated, selected SFT checkpoint."""
+    checkpoint = Path(path).expanduser().resolve()
+    pointer = checkpoint.parent / f"{stage}-best.json"
+    if not pointer.is_file():
+        raise ValueError(f"Missing {stage} best-checkpoint record: {pointer}")
+    payload = json.loads(pointer.read_text(encoding="utf-8"))
+    selected = (checkpoint.parent / payload["checkpoint"]).resolve()
+    if checkpoint != selected:
+        raise ValueError(
+            f"{stage} stage transition requires selected checkpoint {selected}, got {checkpoint}"
+        )
+    validation = payload.get("validation", {})
+    if validation.get("health_pass") is not True:
+        raise ValueError(f"Selected {stage} checkpoint did not pass parse/EOS health gates")
+    return checkpoint
+
+
 def _evaluation_records(
     *, config, dataloader, model, tokenizer, graph_samplers, device, split, condition_kind,
     do_sample: bool,
@@ -121,6 +140,7 @@ def _evaluation_records(
             batch = prepare_batch(
                 device, sample, tokenizer, True, _prompt_length(config),
                 generation["max_new_tokens"], True, condition_kind,
+                condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
             )
             generation_kwargs = {
                 "max_new_tokens": int(generation["max_new_tokens"]),
@@ -139,9 +159,8 @@ def _evaluation_records(
                 attention_mask=batch.attention_mask,
                 **generation_kwargs,
             )
-            predictions = tokenizer.batch_decode(
-                generated[:, batch.input_ids.shape[1]:], skip_special_tokens=True
-            )
+            completion_ids = generated[:, batch.input_ids.shape[1]:]
+            predictions = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
             methods = ["smatch", "jaccard", "dice", "overlap"]
             if batch.conditions is None:
                 scores, _ = scoring_input_act_batch(
@@ -160,9 +179,21 @@ def _evaluation_records(
                 zip(batch.source, batch.target, predictions, scores)
             ):
                 spec = None if batch.conditions is None else batch.conditions[offset]
+                token_ids = completion_ids[offset].tolist()
+                eos_emitted = tokenizer.eos_token_id in token_ids
+                generated_token_count = (
+                    token_ids.index(tokenizer.eos_token_id) + 1
+                    if eos_emitted else len(token_ids)
+                )
                 records.append(build_evaluation_record(
                     record_id=f"{split}:{record_index}", observation=source,
                     reference=target, prediction=prediction, scores=score, condition=spec,
+                    eos_emitted=eos_emitted,
+                    generated_token_count=generated_token_count,
+                    hit_max_new_tokens=(
+                        not eos_emitted
+                        and generated_token_count >= int(generation["max_new_tokens"])
+                    ),
                 ))
                 record_index += 1
     return records
@@ -174,6 +205,22 @@ def _aggregate_evaluation_metrics(records) -> dict[str, float | None]:
     for name in metric_columns:
         values = [float(record[name]) for record in records if record[name] is not None]
         metrics[name] = sum(values) / len(values) if values else None
+    for output_name, record_name in (
+        ("eos_rate", "eos_emitted"),
+        ("max_length_rate", "hit_max_new_tokens"),
+    ):
+        values = [
+            float(record[record_name])
+            for record in records
+            if record.get(record_name) is not None
+        ]
+        metrics[output_name] = sum(values) / len(values) if values else None
+    lengths = [
+        float(record["generated_token_count"])
+        for record in records
+        if record.get("generated_token_count") is not None
+    ]
+    metrics["mean_generated_tokens"] = sum(lengths) / len(lengths) if lengths else None
     return metrics
 
 
@@ -201,6 +248,7 @@ def _model_and_tokenizer(config, nentity, nrelation, args, stage):
     if args.parent_checkpoint:
         if stage != "conditional":
             raise ValueError("--parent-checkpoint is only valid for conditional SFT or GRPO")
+        _require_selected_healthy_checkpoint(args.parent_checkpoint, stage="unconditional")
         loaded = load_reproduction_checkpoint(
             args.parent_checkpoint,
             mode="parent",
@@ -222,8 +270,10 @@ def run_sft(config, args) -> Path:
     if args.stage == "conditional" and not (args.parent_checkpoint or args.resume_checkpoint):
         raise ValueError("Conditional SFT requires --parent-checkpoint or --resume-checkpoint")
 
-    dataset_dict, nentity, nrelation = _datasets(config, ["train", "valid"])
     stage_config = config.raw["training"][args.stage]
+    dataset_dict, nentity, nrelation = _datasets(
+        config, ["train", "valid"], train_variant=stage_config["data_variant"]
+    )
     validation_config = config.raw["training"]["validation"]
     checkpoint_config = config.raw["training"]["checkpoint"]
     dataloader = _loader(dataset_dict["train"], stage_config["micro_batch_size"], config.seed, True)
@@ -272,6 +322,7 @@ def run_sft(config, args) -> Path:
         tgt_len=config.raw["generation"]["max_new_tokens"],
         is_gen=False,
         condition=condition,
+        condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
     )
     final_epoch = int(stage_config["epochs"])
     if start_epoch >= final_epoch:
@@ -323,6 +374,7 @@ def run_sft(config, args) -> Path:
                 tgt_len=config.raw["generation"]["max_new_tokens"],
                 is_gen=False,
                 condition=condition,
+                condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
             )
             validation_loss = sft_validation_loss(
                 model=model, dataloader=validation_loader, prepare=validation_prepare
@@ -346,6 +398,12 @@ def run_sft(config, args) -> Path:
                 "validation_loss": validation_loss,
                 **_aggregate_evaluation_metrics(validation_records),
             }
+            validation_record["health_pass"] = (
+                float(validation_record["parse_ok"] or 0.0)
+                >= float(validation_config["min_parse_ok"])
+                and float(validation_record["eos_rate"] or 0.0)
+                >= float(validation_config["min_eos_rate"])
+            )
             improved = is_better_validation(args.stage, validation_record, best_record)
             validation_record["is_best"] = improved
             _write_validation_artifacts(
@@ -395,6 +453,11 @@ def run_sft(config, args) -> Path:
             )
             history_record["pruned_checkpoints"] = [path.name for path in removed]
         append_jsonl(history_path, history_record)
+    if best_record is None:
+        raise RuntimeError(
+            f"{args.stage} SFT never passed the configured parse/EOS health gates; "
+            "inspect validation artifacts before continuing"
+        )
     return output
 
 
@@ -407,7 +470,15 @@ def run_evaluation(config, args) -> Path:
         expected_config_hash=config.semantic_hash,
         expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
     )
-    dataset_dict, _, _ = _datasets(config, [args.test_split])
+    checkpoint_stage = loaded.metadata["stage"]
+    train_variant = (
+        config.raw["training"][checkpoint_stage]["data_variant"]
+        if checkpoint_stage in {"unconditional", "conditional"}
+        else config.raw["grpo"]["data_variant"]
+    )
+    dataset_dict, _, _ = _datasets(
+        config, [args.test_split], train_variant=train_variant
+    )
     dataloader = _loader(dataset_dict[args.test_split], args.overwrite_batchsize or 4, config.seed, False)
     graph_samplers = _graph_samplers(config)
     device = _require_cuda("evaluation")
@@ -422,12 +493,15 @@ def run_evaluation(config, args) -> Path:
         device=device,
         split=args.test_split,
         condition_kind=condition_kind,
-        do_sample=bool(config.raw["generation"]["do_sample"]),
+        do_sample=bool(config.raw["generation"]["do_sample"] and not args.greedy),
     )
     output_root = config.runtime_paths["run_root"] / config.experiment["name"]
-    jsonl_path = write_evaluation_jsonl(output_root / f"{args.test_split}.jsonl", records)
+    decode_kind = "greedy" if args.greedy or not config.raw["generation"]["do_sample"] else "sampled"
+    jsonl_path = write_evaluation_jsonl(
+        output_root / f"{args.test_split}-{decode_kind}.jsonl", records
+    )
     pd.Series(_aggregate_evaluation_metrics(records), name="mean").to_csv(
-        output_root / f"{args.test_split}.csv"
+        output_root / f"{args.test_split}-{decode_kind}.csv"
     )
     return jsonl_path
 
@@ -437,6 +511,7 @@ def run_grpo(config, args) -> Path:
     parent = args.parent_checkpoint or args.checkpoint
     if not parent:
         raise ValueError("GRPO requires --parent-checkpoint with the conditional SFT checkpoint")
+    _require_selected_healthy_checkpoint(parent, stage="conditional")
     loaded = load_reproduction_checkpoint(
         parent,
         mode="parent",
@@ -445,13 +520,21 @@ def run_grpo(config, args) -> Path:
         expected_config_hash=config.semantic_hash,
         expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
     )
-    dataset_dict, _, _ = _datasets(config, ["train"])
+    dataset_dict, _, _ = _datasets(
+        config, ["train"], train_variant=config.raw["grpo"]["data_variant"]
+    )
     tokenizer = loaded.tokenizer
 
     def add_prompt(example):
         value = condition_value_from_target(config.condition, example["target"])
         spec = ConditionSpec(config.condition, value)
-        return {"prompt": build_prompt(example["source"], spec, tokenizer), "condition": value}
+        return {
+            "prompt": build_prompt(
+                example["source"], spec, tokenizer,
+                condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
+            ),
+            "condition": value,
+        }
 
     dataset = dataset_dict["train"].map(add_prompt)
     graph_samplers = _graph_samplers(config)

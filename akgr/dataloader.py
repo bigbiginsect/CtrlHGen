@@ -90,8 +90,11 @@ def create_reproduction_dataset(
         experiment_config: ExperimentConfig,
         pattern_filtered,
         splits,
-        is_act: bool):
+        is_act: bool,
+        train_variant: str = 'base'):
     """Load hash-verified data selected by a strict reproduction manifest."""
+    if train_variant not in {'base', 'merged'}:
+        raise ValueError("train_variant must be base or merged")
     manifest_path = experiment_config.sampling_manifest_path
     if not manifest_path.is_file():
         raise FileNotFoundError(
@@ -116,8 +119,7 @@ def create_reproduction_dataset(
     pattern_str_2_id = dict(zip(pattern_filtered['pattern_str'], pattern_filtered.index))
     dataset_dict = {}
     for split in splits:
-        variant = experiment_config.raw['data']['training_variant'] \
-            if split == 'train' else 'base'
+        variant = train_variant if split == 'train' else 'base'
         if split not in artifacts.get(variant, {}):
             raise ValueError(f"Manifest has no {variant}.{split} artifact")
         raw_records = _load_manifest_artifact(

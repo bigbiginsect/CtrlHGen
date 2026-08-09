@@ -677,6 +677,9 @@ def build_evaluation_record(
     prediction: str,
     scores: dict,
     condition: ConditionSpec | None = None,
+    eos_emitted: bool | None = None,
+    generated_token_count: int | None = None,
+    hit_max_new_tokens: bool | None = None,
 ) -> dict:
     """Build the stable per-sample JSONL contract for Phase A evaluation."""
     parse_ok, parse_error = parse_action_status(prediction)
@@ -693,6 +696,13 @@ def build_evaluation_record(
         "smatch": float(scores.get("smatch", 0.0)),
         "parse_ok": parse_ok,
         "parse_error": parse_error,
+        "eos_emitted": None if eos_emitted is None else bool(eos_emitted),
+        "generated_token_count": (
+            None if generated_token_count is None else int(generated_token_count)
+        ),
+        "hit_max_new_tokens": (
+            None if hit_max_new_tokens is None else bool(hit_max_new_tokens)
+        ),
     }
 
 

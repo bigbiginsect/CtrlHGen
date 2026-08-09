@@ -57,13 +57,20 @@ def test_manifest_loader_selects_merged_train_and_base_validation(tmp_path, monk
 
     patterns = pd.read_csv("akgr/metadata/pattern_filtered.csv", index_col="id")
     datasets, nentity, nrelation = create_reproduction_dataset(
-        config, patterns, splits=["train", "valid"], is_act=False
+        config, patterns, splits=["train", "valid"], is_act=False,
+        train_variant="merged",
     )
     assert len(datasets["train"]) == 2
     assert len(datasets["valid"]) == 1
     assert datasets["train"][0]["record_id"] == "base-0"
     assert datasets["train"][1]["record_id"] == "augmented-0"
     assert (nentity, nrelation) == (10, 4)
+
+    base_datasets, _, _ = create_reproduction_dataset(
+        config, patterns, splits=["train"], is_act=False, train_variant="base"
+    )
+    assert len(base_datasets["train"]) == 1
+    assert base_datasets["train"][0]["record_id"] == "base-0"
 
 
 def test_manifest_loader_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
@@ -91,7 +98,9 @@ def test_manifest_loader_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
     patterns = pd.read_csv("akgr/metadata/pattern_filtered.csv", index_col="id")
 
     try:
-        create_reproduction_dataset(config, patterns, splits=["train"], is_act=False)
+        create_reproduction_dataset(
+            config, patterns, splits=["train"], is_act=False, train_variant="merged"
+        )
     except ValueError as exc:
         assert "hash mismatch" in str(exc)
     else:

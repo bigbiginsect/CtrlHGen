@@ -8,7 +8,7 @@ transformers = pytest.importorskip("transformers")
 pytest.importorskip("smatch")
 
 from akgr.abduction_model.reproduction import create_sft_optimizer_schedule, sft_train_epoch
-from akgr.tokenizer import create_reproduction_tokenizer
+from akgr.tokenizer import create_reproduction_tokenizer, prepare_batch
 from akgr.utils.load_util import load_reproduction_checkpoint, save_reproduction_checkpoint
 
 
@@ -61,6 +61,62 @@ def test_sft_train_epoch_updates_parameters():
     assert loss > 0
     assert steps == 2
     assert any(not torch.equal(before[name], value) for name, value in model.state_dict().items())
+
+
+@pytest.mark.synthetic
+def test_tiny_model_can_learn_both_prompt_contracts_and_emit_eos():
+    """Catch prompt-boundary or label-mask bugs before a full GPU run."""
+    torch.manual_seed(19)
+    tokenizer = create_reproduction_tokenizer(4, 2)
+    model = _model(tokenizer)
+    sample = {
+        "source": ["1 2"],
+        "target": ["i -1 1 -2 2"],
+        "pattern_id": [0],
+    }
+
+    def fit_contract(condition):
+        batch = prepare_batch(
+            "cpu", sample, tokenizer, True, 24, 8, False, condition,
+            condition_delimiter="COND",
+        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        model.train()
+        for _ in range(250):
+            optimizer.zero_grad(set_to_none=True)
+            loss = model(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                labels=batch.labels,
+            ).loss
+            loss.backward()
+            optimizer.step()
+            if float(loss.detach()) < 0.01:
+                break
+
+    def generate_contract(condition):
+        batch = prepare_batch(
+            "cpu", sample, tokenizer, True, 24, 8, True, condition,
+            condition_delimiter="COND",
+        )
+        model.eval()
+        with torch.no_grad():
+            generated = model.generate(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                do_sample=False,
+                max_new_tokens=8,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )[:, batch.input_ids.shape[1]:]
+        token_ids = generated[0].tolist()
+        assert tokenizer.eos_token_id in token_ids
+        return tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    fit_contract("unconditional")
+    assert generate_contract("unconditional") == sample["target"][0]
+    fit_contract("pattern")
+    assert generate_contract("pattern") == sample["target"][0]
 
 
 @pytest.mark.synthetic

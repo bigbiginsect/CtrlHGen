@@ -1,17 +1,18 @@
 schema_version: 1
 experiment:
-  name: repro-wn-pattern-full-author-scale
+  name: repro-wn-pattern-full-author-scale-v2
   dataset: WN18RR
   profile: full
   seed: 42
   condition: pattern
+tokenizer:
+  condition_delimiter: COND
 data:
   max_answers: 32
   split_ratios: [0.8, 0.1, 0.1]
   reverse_edges: true
   max_attempts_per_record: 10000
   workers: 4
-  training_variant: merged
 sampling:
   train_per_pattern: 8000
   valid_per_pattern: 1000
@@ -28,11 +29,14 @@ model:
   n_head: 12
   n_positions: 1024
   n_ctx: 1024
+  tie_word_embeddings: true
 training:
   gradient_accumulation_steps: 32
   validation:
     every_epochs: 10
     batch_size: 16
+    min_parse_ok: 0.90
+    min_eos_rate: 0.98
   checkpoint:
     every_epochs: 25
     keep_last: 2
@@ -42,12 +46,14 @@ training:
     learning_rate: 1.0e-5
     micro_batch_size: 8
     effective_batch_size: 256
+    data_variant: merged
   conditional:
     epochs: 50
     warmup_epochs: 5
     learning_rate: 1.0e-5
     micro_batch_size: 8
     effective_batch_size: 256
+    data_variant: base
 generation:
   do_sample: true
   top_k: 0
@@ -65,6 +71,7 @@ grpo:
   save_steps: 500
   save_total_limit: 2
   report_to: []
+  data_variant: base
   reward_weights:
     jaccard: 1.0
     dice: 0.5

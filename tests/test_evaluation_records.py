@@ -34,9 +34,13 @@ def test_record_separates_parse_failure_from_zero_scores(tmp_path):
     record = build_evaluation_record(
         record_id="test:0", observation="1", reference="-1 1", prediction="garbage",
         scores={"jaccard": 0, "dice": 0, "overlap": 0, "smatch": 0}, condition=None,
+        eos_emitted=False, generated_token_count=33, hit_max_new_tokens=True,
     )
     assert record["parse_ok"] is False
     assert record["condition_accuracy"] is None
+    assert record["eos_emitted"] is False
+    assert record["generated_token_count"] == 33
+    assert record["hit_max_new_tokens"] is True
     path = write_evaluation_jsonl(tmp_path / "records.jsonl", [record])
     assert json.loads(path.read_text().strip())["record_id"] == "test:0"
 
@@ -71,6 +75,9 @@ def test_conditional_record_contract(spec):
         "smatch": 1.0,
         "parse_ok": True,
         "parse_error": None,
+        "eos_emitted": None,
+        "generated_token_count": None,
+        "hit_max_new_tokens": None,
     }
 
 

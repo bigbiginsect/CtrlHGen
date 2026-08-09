@@ -23,6 +23,7 @@ ROOT_ENV = {
 TOP_LEVEL_KEYS = {
     "schema_version",
     "experiment",
+    "tokenizer",
     "data",
     "sampling",
     "augmentation",
@@ -34,13 +35,13 @@ TOP_LEVEL_KEYS = {
 
 SECTION_KEYS = {
     "experiment": {"name", "dataset", "profile", "seed", "condition"},
+    "tokenizer": {"condition_delimiter"},
     "data": {
         "max_answers",
         "split_ratios",
         "reverse_edges",
         "max_attempts_per_record",
         "workers",
-        "training_variant",
     },
     "sampling": {"train_per_pattern", "valid_per_pattern", "test_per_pattern"},
     "augmentation": {"enabled", "splits", "source_patterns"},
@@ -52,6 +53,7 @@ SECTION_KEYS = {
         "n_head",
         "n_positions",
         "n_ctx",
+        "tie_word_embeddings",
     },
     "training": {
         "gradient_accumulation_steps",
@@ -72,12 +74,20 @@ SECTION_KEYS = {
         "save_steps",
         "save_total_limit",
         "report_to",
+        "data_variant",
         "reward_weights",
     },
 }
 
-STAGE_KEYS = {"epochs", "warmup_epochs", "learning_rate", "micro_batch_size", "effective_batch_size"}
-VALIDATION_KEYS = {"every_epochs", "batch_size"}
+STAGE_KEYS = {
+    "epochs",
+    "warmup_epochs",
+    "learning_rate",
+    "micro_batch_size",
+    "effective_batch_size",
+    "data_variant",
+}
+VALIDATION_KEYS = {"every_epochs", "batch_size", "min_parse_ok", "min_eos_rate"}
 CHECKPOINT_KEYS = {"every_epochs", "keep_last"}
 REWARD_KEYS = {"jaccard", "dice", "overlap", "condition"}
 
@@ -170,16 +180,17 @@ def _validate(raw: dict[str, Any]) -> None:
     if exp["dataset"] != "WN18RR":
         raise ValueError("Phase A reproduce configs support WN18RR only")
     normalize_condition(str(exp["condition"]))
-    if exp["profile"] not in {"tiny", "small", "full"}:
-        raise ValueError("profile must be tiny, small, or full")
+    if exp["profile"] not in {"tiny", "small", "full", "diagnostic"}:
+        raise ValueError("profile must be tiny, small, full, or diagnostic")
     if not isinstance(exp["seed"], int) or exp["seed"] < 0:
         raise ValueError("experiment.seed must be a non-negative integer")
+
+    if raw["tokenizer"]["condition_delimiter"] != "COND":
+        raise ValueError("Strict reproduction configs must use the dedicated COND delimiter")
 
     data = raw["data"]
     if [float(x) for x in data["split_ratios"]] != [0.8, 0.1, 0.1]:
         raise ValueError("Phase A KG split_ratios must be [0.8, 0.1, 0.1]")
-    if data["training_variant"] not in {"base", "merged"}:
-        raise ValueError("data.training_variant must be base or merged")
     if int(data["max_answers"]) <= 0 or int(data["max_attempts_per_record"]) <= 0:
         raise ValueError("max_answers and max_attempts_per_record must be positive")
     if int(data["workers"]) <= 0:
@@ -199,6 +210,8 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ValueError("Reproduction model must use the explicit GPT-2 small 12x768x12 structure")
     if model["n_positions"] != model["n_ctx"]:
         raise ValueError("model.n_positions and model.n_ctx must match")
+    if not isinstance(model["tie_word_embeddings"], bool):
+        raise ValueError("model.tie_word_embeddings must be a boolean")
 
     accumulation = int(raw["training"]["gradient_accumulation_steps"])
     if accumulation <= 0:
@@ -207,6 +220,10 @@ def _validate(raw: dict[str, Any]) -> None:
         stage_config = raw["training"][stage]
         if int(stage_config["epochs"]) <= 0 or int(stage_config["micro_batch_size"]) <= 0:
             raise ValueError(f"training.{stage} epochs and micro_batch_size must be positive")
+        if not 0 <= int(stage_config["warmup_epochs"]) <= int(stage_config["epochs"]):
+            raise ValueError(f"training.{stage}.warmup_epochs must be between zero and epochs")
+        if stage_config["data_variant"] not in {"base", "merged"}:
+            raise ValueError(f"training.{stage}.data_variant must be base or merged")
         expected_effective = int(stage_config["micro_batch_size"]) * accumulation
         if int(stage_config["effective_batch_size"]) != expected_effective:
             raise ValueError(
@@ -217,10 +234,15 @@ def _validate(raw: dict[str, Any]) -> None:
     checkpoint = raw["training"]["checkpoint"]
     if int(validation["every_epochs"]) <= 0 or int(validation["batch_size"]) <= 0:
         raise ValueError("training.validation values must be positive")
+    for metric in ("min_parse_ok", "min_eos_rate"):
+        if not 0.0 <= float(validation[metric]) <= 1.0:
+            raise ValueError(f"training.validation.{metric} must be between zero and one")
     if int(checkpoint["every_epochs"]) <= 0 or int(checkpoint["keep_last"]) <= 0:
         raise ValueError("training.checkpoint values must be positive")
 
     grpo = raw["grpo"]
+    if grpo["data_variant"] not in {"base", "merged"}:
+        raise ValueError("grpo.data_variant must be base or merged")
     if grpo["num_generations"] != 4:
         raise ValueError("grpo.num_generations must be 4")
     if grpo["per_device_train_batch_size"] % grpo["num_generations"]:

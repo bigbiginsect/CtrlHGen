@@ -15,6 +15,7 @@ from akgr.abduction_model.reproduction import (
     sft_validation_loss,
     write_best_checkpoint_pointer,
 )
+from akgr.abduction_model.experiment_runner import _require_selected_healthy_checkpoint
 
 
 def test_epoch_schedule_always_includes_final_epoch():
@@ -24,6 +25,11 @@ def test_epoch_schedule_always_includes_final_epoch():
 
 
 def test_stage_specific_best_validation_selection():
+    assert not is_better_validation(
+        "conditional",
+        {"validation_loss": 0.1, "condition_accuracy": 1.0, "health_pass": False},
+        None,
+    )
     unconditional = {"validation_loss": 2.0, "jaccard": 0.2}
     assert is_better_validation(
         "unconditional", {"validation_loss": 1.5, "jaccard": 0.0}, unconditional
@@ -88,6 +94,31 @@ def test_best_pointer_and_retention_keep_best_plus_latest(tmp_path):
         "unconditional-epoch-10",
     }
     assert (tmp_path / "conditional-epoch-5").is_dir()
+
+
+def test_stage_transition_requires_selected_checkpoint_that_passed_health_gate(tmp_path):
+    selected = tmp_path / "unconditional-epoch-10"
+    selected.mkdir()
+    other = tmp_path / "unconditional-epoch-20"
+    other.mkdir()
+    pointer = tmp_path / "unconditional-best.json"
+    pointer.write_text(json.dumps({
+        "checkpoint": selected.name,
+        "validation": {"health_pass": True, "parse_ok": 0.95, "eos_rate": 1.0},
+    }))
+
+    assert _require_selected_healthy_checkpoint(
+        selected, stage="unconditional"
+    ) == selected.resolve()
+    with pytest.raises(ValueError, match="requires selected checkpoint"):
+        _require_selected_healthy_checkpoint(other, stage="unconditional")
+
+    pointer.write_text(json.dumps({
+        "checkpoint": selected.name,
+        "validation": {"health_pass": False},
+    }))
+    with pytest.raises(ValueError, match="did not pass"):
+        _require_selected_healthy_checkpoint(selected, stage="unconditional")
 
 
 class _LossModel:

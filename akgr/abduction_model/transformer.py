@@ -25,7 +25,9 @@ from akgr.abduction_model.t5 import myT5
 
 def create_gpt2_config(tokenizer, model_config: dict) -> GPT2Config:
     """Build the Phase A GPT-2 config without network/local-template access."""
-    required = {"n_layer", "n_embd", "n_head", "n_positions", "n_ctx"}
+    required = {
+        "n_layer", "n_embd", "n_head", "n_positions", "n_ctx", "tie_word_embeddings"
+    }
     missing = required - set(model_config)
     if missing:
         raise ValueError(f"Missing explicit GPT-2 config keys: {sorted(missing)}")
@@ -45,6 +47,7 @@ def create_gpt2_config(tokenizer, model_config: dict) -> GPT2Config:
         n_head=int(model_config["n_head"]),
         n_positions=int(model_config["n_positions"]),
         n_ctx=int(model_config["n_ctx"]),
+        tie_word_embeddings=bool(model_config["tie_word_embeddings"]),
     )
 
 

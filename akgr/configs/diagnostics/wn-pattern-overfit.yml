@@ -1,8 +1,8 @@
 schema_version: 1
 experiment:
-  name: repro-wn-pattern-tiny-v2
+  name: diagnostic-wn-pattern-overfit-v2
   dataset: WN18RR
-  profile: tiny
+  profile: diagnostic
   seed: 42
   condition: pattern
 tokenizer:
@@ -31,31 +31,31 @@ model:
   n_ctx: 1024
   tie_word_embeddings: true
 training:
-  gradient_accumulation_steps: 32
+  gradient_accumulation_steps: 1
   validation:
-    every_epochs: 1
-    batch_size: 4
-    min_parse_ok: 0.0
-    min_eos_rate: 0.0
+    every_epochs: 5
+    batch_size: 8
+    min_parse_ok: 0.80
+    min_eos_rate: 0.95
   checkpoint:
-    every_epochs: 1
+    every_epochs: 10
     keep_last: 2
   unconditional:
-    epochs: 1
-    warmup_epochs: 0
-    learning_rate: 1.0e-5
+    epochs: 50
+    warmup_epochs: 5
+    learning_rate: 1.0e-4
     micro_batch_size: 8
-    effective_batch_size: 256
-    data_variant: merged
+    effective_batch_size: 8
+    data_variant: base
   conditional:
-    epochs: 1
-    warmup_epochs: 0
-    learning_rate: 1.0e-5
+    epochs: 25
+    warmup_epochs: 2
+    learning_rate: 1.0e-4
     micro_batch_size: 8
-    effective_batch_size: 256
+    effective_batch_size: 8
     data_variant: base
 generation:
-  do_sample: true
+  do_sample: false
   top_k: 0
   top_p: 1.0
   temperature: 1.0

@@ -142,7 +142,7 @@ def create_reproduction_tokenizer(nentity: int, nrelation: int):
     if nentity <= 0 or nrelation <= 0:
         raise ValueError("nentity and nrelation must be positive")
     ordered_tokens = [
-        "PAD", "END", "START", "UNK", "SEP",
+        "PAD", "END", "START", "UNK", "SEP", "COND",
         "(", ")", "e", "p", "i", "u", "n",
         "1p", "2p", "3p", "4p",
         "1e", "2e", "3e", "4e", "5e", "with",
@@ -166,6 +166,7 @@ def create_reproduction_tokenizer(nentity: int, nrelation: int):
         pad_token="PAD",
         unk_token="UNK",
         sep_token="SEP",
+        additional_special_tokens=["COND"],
     )
     actual_ids = sorted(tokenizer.get_vocab().values())
     if actual_ids != list(range(len(tokenizer))):
@@ -191,22 +192,27 @@ def condition_value_from_target(condition: str, target: str) -> str:
     raise AssertionError(f"Unhandled normalized condition: {condition}")
 
 
-def build_prompt(source: str, condition: ConditionSpec | None, tokenizer) -> str:
-    """Build a prompt using the tokenizer's real separator token.
+def build_prompt(
+    source: str,
+    condition: ConditionSpec | None,
+    tokenizer,
+    condition_delimiter: str | None = None,
+) -> str:
+    """Build a prompt without changing the target-boundary token's meaning.
 
-    The legacy implementation used the literal ``[SEP]`` even though the
-    repository tokenizer contains ``SEP``.  Keeping this helper as the only
-    prompt builder prevents the condition delimiter from silently becoming
-    ``UNK``.
+    Legacy callers default to the historical ``SEP`` delimiter.  Strict
+    reproduction configs pass the dedicated ``COND`` token so the sequence is
+    ``answers COND condition SEP target END`` in the conditional stage while
+    the unconditional contract remains ``answers SEP target END``.
     """
     if condition is None:
         return source
-    separator = tokenizer.sep_token
-    if not separator:
-        raise ValueError("The tokenizer must define sep_token for conditional prompts")
-    if tokenizer.convert_tokens_to_ids(separator) == tokenizer.unk_token_id:
-        raise ValueError(f"Tokenizer separator {separator!r} resolves to UNK")
-    return f"{source} {separator} {condition.value}"
+    delimiter = condition_delimiter or tokenizer.sep_token
+    if not delimiter:
+        raise ValueError("A condition delimiter must be configured")
+    if tokenizer.convert_tokens_to_ids(delimiter) == tokenizer.unk_token_id:
+        raise ValueError(f"Condition delimiter {delimiter!r} resolves to UNK")
+    return f"{source} {delimiter} {condition.value}"
 
 
 def prepare_batch(
@@ -218,6 +224,7 @@ def prepare_batch(
     tgt_len: int,
     is_gen: bool,
     condition: str = "unconditional",
+    condition_delimiter: str | None = None,
 ) -> PreparedBatch:
     """Prepare an unconditional or controlled batch through one code path."""
     kind = normalize_condition(condition)
@@ -227,7 +234,10 @@ def prepare_batch(
     conditions = None
     if kind != "unconditional":
         conditions = [ConditionSpec(kind, condition_value_from_target(kind, value)) for value in target]
-    prompts = [build_prompt(value, spec, tokenizer) for value, spec in zip(source, conditions or [None] * len(source))]
+    prompts = [
+        build_prompt(value, spec, tokenizer, condition_delimiter=condition_delimiter)
+        for value, spec in zip(source, conditions or [None] * len(source))
+    ]
 
     if not is_gpt:
         prompt_tokens = tokenizer(

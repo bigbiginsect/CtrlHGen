@@ -23,10 +23,12 @@ def test_explicit_gpt2_config_is_offline_and_strict():
     config = create_gpt2_config(StubTokenizer(), {
         "n_layer": 12, "n_embd": 768, "n_head": 12,
         "n_positions": 1024, "n_ctx": 1024,
+        "tie_word_embeddings": True,
     })
     assert (config.n_layer, config.n_embd, config.n_head) == (12, 768, 12)
     assert config.vocab_size == 128
     assert config._name_or_path == ""
+    assert config.tie_word_embeddings is True
 
 
 def test_explicit_gpt2_config_rejects_incomplete_or_invalid_shape():
@@ -35,6 +37,7 @@ def test_explicit_gpt2_config_rejects_incomplete_or_invalid_shape():
     with pytest.raises(ValueError, match="divisible"):
         create_gpt2_config(StubTokenizer(), {
             "n_layer": 2, "n_embd": 63, "n_head": 8, "n_positions": 64, "n_ctx": 64,
+            "tie_word_embeddings": True,
         })
 
 
@@ -46,6 +49,7 @@ def test_real_reproduction_tokenizer_is_contiguous_and_runs_tiny_forward():
     model = create_reproduction_transformer(tokenizer, {
         "n_layer": 1, "n_embd": 32, "n_head": 4,
         "n_positions": 64, "n_ctx": 64,
+        "tie_word_embeddings": True,
     })
     encoded = tokenizer("1 2", "-1 1", return_tensors="pt")
     output = model(**encoded, labels=encoded.input_ids)
@@ -61,6 +65,7 @@ def test_full_reproduction_gpt2_config_initializes_and_forwards_offline_on_gpu()
     model = create_reproduction_transformer(tokenizer, {
         "n_layer": 12, "n_embd": 768, "n_head": 12,
         "n_positions": 1024, "n_ctx": 1024,
+        "tie_word_embeddings": True,
     }).to("cuda")
     encoded = tokenizer("1 2", "-1 1", return_tensors="pt").to("cuda")
     with torch.no_grad():

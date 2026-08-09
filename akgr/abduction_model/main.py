@@ -841,6 +841,7 @@ def my_parse_args():
     parser.add_argument('--resume-checkpoint')
     parser.add_argument('--checkpoint')
     parser.add_argument('--max-steps', type=int, default=-1)
+    parser.add_argument('--greedy', action='store_true')
 
     # Configurations
     parser.add_argument('--modelname')
@@ -906,7 +907,8 @@ def main():
     if args.experiment_config:
         strict_flags = {
             '--experiment-config', '--mode', '--stage', '--parent-checkpoint',
-            '--resume-checkpoint', '--checkpoint', '--max-steps',
+            '--resume-checkpoint', '--checkpoint', '--max-steps', '--greedy',
+            '--test_split', '--overwrite_batchsize',
         }
         supplied_flags = {
             token.split('=', 1)[0]

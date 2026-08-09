@@ -65,6 +65,8 @@ def validation_selection_key(stage: str, record: dict) -> tuple[float, ...]:
 
 def is_better_validation(stage: str, candidate: dict, current: dict | None) -> bool:
     """Select lower loss for unconditional and condition adherence for conditional."""
+    if candidate.get("health_pass") is False:
+        return False
     if current is None:
         return True
     return validation_selection_key(stage, candidate) > validation_selection_key(stage, current)
