@@ -17,6 +17,7 @@ sampling:
   train_per_pattern: 8000
   valid_per_pattern: 128
   test_per_pattern: 128
+  deduplication: full_supervision_across_splits
 augmentation:
   enabled: true
   splits: [train]

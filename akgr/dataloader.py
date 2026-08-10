@@ -103,8 +103,9 @@ def create_reproduction_dataset(
         )
     with manifest_path.open(encoding='utf-8') as handle:
         manifest = json.load(handle)
+    deduplication = experiment_config.raw['sampling'].get('deduplication')
     expected = {
-        'schema_version': 2,
+        'schema_version': 3 if deduplication is not None else 2,
         'dataset': experiment_config.dataset,
         'profile': experiment_config.experiment['profile'],
         'seed': experiment_config.seed,
@@ -117,6 +118,15 @@ def create_reproduction_dataset(
                 f"Sampling manifest {key} mismatch: expected {value!r}, "
                 f"found {manifest.get(key)!r}"
             )
+    if deduplication is not None:
+        manifest_deduplication = manifest.get('deduplication', {})
+        if manifest_deduplication.get('policy') != deduplication:
+            raise ValueError(
+                'Sampling manifest deduplication mismatch: '
+                f"expected {deduplication!r}, found {manifest_deduplication.get('policy')!r}"
+            )
+        if any(manifest_deduplication.get('post_dedup_overlap', {}).values()):
+            raise ValueError('Sampling manifest reports cross-split supervision leakage')
     artifacts = manifest['artifacts']
     pattern_str_2_id = dict(zip(pattern_filtered['pattern_str'], pattern_filtered.index))
     dataset_dict = {}

@@ -172,6 +172,71 @@ def run_tasks(tasks: list[dict[str, Any]], graph_samplers, workers: int) -> tupl
     return records, failures
 
 
+def _supervision_signature(record: Mapping[str, Any]) -> str:
+    return _canonical_json({
+        key: record[key] for key in ("answers", "query", "pattern_str")
+    })
+
+
+def deduplicate_full_supervision_across_splits(
+    sampled: dict[str, list[dict[str, Any]]],
+    tasks: Mapping[str, list[dict[str, Any]]],
+    graph_samplers,
+) -> dict[str, Any]:
+    """Freeze test/valid and deterministically resample lower-priority conflicts."""
+    replacements = []
+    reserved: set[str] = set()
+    for split in ("test", "valid", "train"):
+        higher_priority = set(reserved)
+        for index, record in enumerate(sampled[split]):
+            if _supervision_signature(record) not in higher_priority:
+                continue
+            original = record
+            task = tasks[split][index]
+            for salt in range(1, 101):
+                replacement_task = dict(task)
+                replacement_task["task_seed"] = derive_seed(
+                    task["task_seed"], "full_supervision_across_splits", salt
+                )
+                init_workers(graph_samplers)
+                result = sample_task(replacement_task)
+                if not result["ok"]:
+                    continue
+                candidate = result["record"]
+                if _supervision_signature(candidate) in higher_priority:
+                    continue
+                sampled[split][index] = candidate
+                replacements.append({
+                    "split": split,
+                    "task_index": int(task["task_index"]),
+                    "pattern_abbr": task["pattern_abbr"],
+                    "ordinal": int(task["ordinal"]),
+                    "salt": salt,
+                    "original_record_id": original["record_id"],
+                    "replacement_record_id": candidate["record_id"],
+                })
+                break
+            else:
+                raise RuntimeError(
+                    f"Unable to deduplicate {split} task {task['task_index']} after 100 seeds"
+                )
+        reserved.update(_supervision_signature(record) for record in sampled[split])
+    overlaps = {}
+    for left, right in (("train", "valid"), ("train", "test"), ("valid", "test")):
+        left_signatures = {_supervision_signature(record) for record in sampled[left]}
+        right_signatures = {_supervision_signature(record) for record in sampled[right]}
+        overlaps[f"{left}-{right}"] = len(left_signatures & right_signatures)
+    if any(overlaps.values()):
+        raise RuntimeError(f"Cross-split supervision deduplication failed: {overlaps}")
+    return {
+        "policy": "full_supervision_across_splits",
+        "priority": ["test", "valid", "train"],
+        "replacement_count": len(replacements),
+        "replacements": replacements,
+        "post_dedup_overlap": overlaps,
+    }
+
+
 def _write_jsonl(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -288,6 +353,7 @@ def sample_dataset(
     pattern_table_file: str,
     augmentation_enabled: bool,
     augmentation_patterns: Iterable[str],
+    deduplication: str | None = None,
 ) -> Path:
     augmentation_patterns = tuple(augmentation_patterns)
     kg = load_kg(
@@ -301,6 +367,7 @@ def sample_dataset(
     pattern_table_path = Path(pattern_table_file).expanduser().resolve()
     patterns = _patterns(str(pattern_table_path))
     sampled: dict[str, list[dict[str, Any]]] = {}
+    split_tasks: dict[str, list[dict[str, Any]]] = {}
     failures: list[dict[str, Any]] = []
     for split in ("train", "valid", "test"):
         tasks = build_tasks(
@@ -312,6 +379,7 @@ def sample_dataset(
             max_answers=max_answers,
             max_attempts=max_attempts,
         )
+        split_tasks[split] = tasks
         sampled[split], split_failures = run_tasks(tasks, kg.graph_samplers, workers)
         failures.extend(split_failures)
 
@@ -322,6 +390,14 @@ def sample_dataset(
         failure_path.write_text(json.dumps(failures, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         raise RuntimeError(
             f"Sampling failed for {len(failures)} tasks; no sample manifest was published. See {failure_path}"
+        )
+
+    deduplication_report = None
+    if deduplication is not None:
+        if deduplication != "full_supervision_across_splits":
+            raise ValueError(f"Unsupported sampling deduplication policy: {deduplication!r}")
+        deduplication_report = deduplicate_full_supervision_across_splits(
+            sampled, split_tasks, kg.graph_samplers
         )
 
     expected_counts = {split: len(patterns) * int(counts[split]) for split in counts}
@@ -375,7 +451,7 @@ def sample_dataset(
         "merged": {"train": _artifact(merged_path, output_dir, len(merged))},
     }
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3 if deduplication_report is not None else 2,
         "dataset": dataset,
         "profile": profile,
         "seed": int(seed),
@@ -407,6 +483,7 @@ def sample_dataset(
                 },
             },
         },
+        **({"deduplication": deduplication_report} if deduplication_report is not None else {}),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest_path
@@ -458,6 +535,7 @@ def _strict_main(experiment_config: str) -> None:
             pattern_table_file="akgr/metadata/pattern_table.csv",
             augmentation_enabled=raw["augmentation"]["enabled"],
             augmentation_patterns=raw["augmentation"]["source_patterns"],
+            deduplication=raw["sampling"].get("deduplication"),
         )
     except BaseException as exc:
         status.update(

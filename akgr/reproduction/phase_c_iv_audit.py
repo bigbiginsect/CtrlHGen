@@ -90,10 +90,12 @@ def _pattern_names() -> dict[str, str]:
 def audit_data(config: ExperimentConfig, reference_manifest: Path | None = None) -> dict[str, Any]:
     manifest_path = config.sampling_manifest_path
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if set(manifest) != MANIFEST_KEYS:
-        raise ValueError(f"Manifest schema keys differ: {sorted(set(manifest) ^ MANIFEST_KEYS)}")
+    deduplication = config.raw["sampling"].get("deduplication")
+    manifest_keys = MANIFEST_KEYS | ({"deduplication"} if deduplication is not None else set())
+    if set(manifest) != manifest_keys:
+        raise ValueError(f"Manifest schema keys differ: {sorted(set(manifest) ^ manifest_keys)}")
     expected_identity = {
-        "schema_version": 2,
+        "schema_version": 3 if deduplication is not None else 2,
         "dataset": config.dataset,
         "profile": config.experiment["profile"],
         "seed": config.seed,
@@ -103,6 +105,10 @@ def audit_data(config: ExperimentConfig, reference_manifest: Path | None = None)
     for key, expected in expected_identity.items():
         if manifest.get(key) != expected:
             raise ValueError(f"Manifest {key} mismatch: {manifest.get(key)!r} != {expected!r}")
+    if deduplication is not None:
+        report = manifest["deduplication"]
+        if report.get("policy") != deduplication or any(report.get("post_dedup_overlap", {}).values()):
+            raise ValueError("Manifest deduplication policy or post-dedup overlap is invalid")
     artifacts = manifest["artifacts"]
     if set(artifacts) != {"base", "augmented_only", "merged"}:
         raise ValueError("Manifest artifact groups differ from the strict schema")

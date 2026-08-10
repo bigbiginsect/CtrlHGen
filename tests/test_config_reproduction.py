@@ -214,6 +214,7 @@ def test_phase_c_iv_changes_only_train_scale_and_run_budget_from_v3() -> None:
             "train_per_pattern": 8000,
             "valid_per_pattern": 128,
             "test_per_pattern": 128,
+            "deduplication": "full_supervision_across_splits",
         }
         assert config.raw["model"] == v3.raw["model"]
         assert config.raw["augmentation"] == v3.raw["augmentation"]

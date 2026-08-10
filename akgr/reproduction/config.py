@@ -43,7 +43,9 @@ SECTION_KEYS = {
         "max_attempts_per_record",
         "workers",
     },
-    "sampling": {"train_per_pattern", "valid_per_pattern", "test_per_pattern"},
+    "sampling": {
+        "train_per_pattern", "valid_per_pattern", "test_per_pattern", "deduplication",
+    },
     "augmentation": {"enabled", "splits", "source_patterns"},
     "model": {
         "type",
@@ -95,9 +97,15 @@ CHECKPOINT_KEYS = {"every_epochs", "keep_last"}
 REWARD_KEYS = {"jaccard", "dice", "overlap", "condition"}
 
 
-def _require_exact_keys(section: str, value: Mapping[str, Any], allowed: set[str]) -> None:
+def _require_exact_keys(
+    section: str,
+    value: Mapping[str, Any],
+    allowed: set[str],
+    *,
+    required: set[str] | None = None,
+) -> None:
     unknown = set(value) - allowed
-    missing = allowed - set(value)
+    missing = (allowed if required is None else required) - set(value)
     if unknown:
         raise ValueError(f"Unknown keys in {section}: {sorted(unknown)}")
     if missing:
@@ -229,7 +237,8 @@ def _validate(raw: dict[str, Any]) -> None:
         value = raw.get(section)
         if not isinstance(value, dict):
             raise ValueError(f"{section} must be a mapping")
-        _require_exact_keys(section, value, allowed)
+        required = allowed - {"deduplication"} if section == "sampling" else allowed
+        _require_exact_keys(section, value, allowed, required=required)
     stage_styles = {
         stage: _validate_stage_shape(stage, raw["training"][stage])
         for stage in ("unconditional", "conditional")
@@ -260,6 +269,11 @@ def _validate(raw: dict[str, Any]) -> None:
     for split_key in ("train_per_pattern", "valid_per_pattern", "test_per_pattern"):
         if int(raw["sampling"][split_key]) <= 0:
             raise ValueError(f"sampling.{split_key} must be positive")
+    deduplication = raw["sampling"].get("deduplication")
+    if deduplication not in {None, "full_supervision_across_splits"}:
+        raise ValueError(
+            "sampling.deduplication must be full_supervision_across_splits when set"
+        )
     if set(raw["augmentation"]["splits"]) != {"train"}:
         raise ValueError("Sub-logic augmentation is train-only")
     if set(raw["augmentation"]["source_patterns"]) != {"up", "3in", "pni", "pin", "inp"}:
