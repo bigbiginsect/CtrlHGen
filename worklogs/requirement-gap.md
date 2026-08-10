@@ -1,14 +1,14 @@
-# CtrlHGen 复现现状、Phase C-III 路线与执行交接
+# CtrlHGen 复现现状、Phase C-IV 结论与执行交接
 
-> 状态日期：2026-08-10（Asia/Shanghai）
+> 状态日期：2026-08-11（Asia/Shanghai）
 >
 > 当前分支：`codex/reproduction-pipeline`
 >
 > 运行原则：本地修改、提交并推送到 `origin`；DSW 只部署并运行精确 commit SHA。
 
-本文是后续 agent 的当前路线入口。2026-08-09 和 2026-08-10 三次 Phase C 的配置、
-曲线、指标、原始证据路径和 SHA256 单独保存在
-`worklogs/phase-c-2026-08-10.md`。该记录是历史证据，不应被改写成第三次实验的预设结论。
+本文是后续 agent 的当前路线入口。前三次 small Phase C 和第四次 full-train 数据规模消融的
+配置、曲线、指标、原始证据路径和 SHA256 单独保存在
+`worklogs/phase-c-2026-08-10.md`。历史记录不能被改写成后续阶段的预设结论。
 
 ## 1. 当前状态
 
@@ -19,8 +19,9 @@
 | Phase C-I | 已失败并归档 | 训练预算不足和 conditional 标签错误同时存在，checkpoint 禁止复用 |
 | Phase C-II | 已完成但指标不理想 | 12 层 paper-aligned small SFT 可生成有效结构，但远低于论文绝对数值 |
 | Phase C-III：author-aligned small | 已完成并审计 | 10+10 pilot 全门槛通过；正式 50+50 和固定 test 完整结束 |
-| Phase D：GRPO | 待决策 | 若进入，必须从同一个 v3 `conditional-best` 启动，禁止使用 v2 |
-| Phase E：验收报告 | 部分完成 | 已有三次 Phase C 证据，尚缺 Phase D 决策/结果和最终报告 |
+| Phase C-IV：author-scale full train | 已完成并审计 | 8+8 pilot、正式 50+50 和一次 frozen test 全部通过；数据覆盖是当前主要瓶颈 |
+| Phase D：GRPO | 建议进入但尚未执行 | 若获得新任务授权，只能从 C-IV healthy `conditional-best` 启动 |
+| Phase E：验收报告 | 部分完成 | 已有四次 Phase C 证据，尚缺 Phase D 结果和最终报告 |
 
 第一次失败 run 的任何 checkpoint 均不得使用：
 
@@ -37,12 +38,12 @@
 与后续 CtrlHGen 对照。固定报告 Jaccard、Dice、Overlap、Pattern Accuracy、Smatch，另行
 报告 parse、EOS、长度与解码方式。
 
-本项目当前目标是：
+Phase C-IV 已完成的目标是：
 
-> 在单张 L20、固定 small 数据和 seed 42 下，检验更接近作者公开仓库意图的模型容量与
-> 训练动力学，完成可审计的两阶段 SFT；之后才决定是否进入 GRPO。
+> 在单张 L20、固定 seed 42、模型和训练动力学完全不变的条件下，只把 base train 从
+> 每 pattern 1,024 条扩大到作者 profile 的 8,000 条，验证训练覆盖不足是否是主要瓶颈。
 
-small 结果不能被写成论文绝对数值复现。论文 Table 3 仅作尺度参照：
+单 seed 结果不能被写成论文绝对数值复现。论文 Table 3 仅作尺度参照：
 
 | 设置 | Jaccard | Dice | Overlap | Pattern Accuracy | Smatch |
 |---|---:|---:|---:|---:|---:|
@@ -194,7 +195,7 @@ batch 160、drop-last false 时，每 epoch 的预期 optimizer step 数为：
 
 任一 manifest hash、schema 或数量不一致都必须停止。不要覆盖已有数据后继续。
 
-## 7. Phase C-III Pilot
+## 7. Phase C-III Pilot（历史流程）
 
 ### 7.1 部署和环境
 
@@ -250,7 +251,7 @@ bash scripts/reproduce/sft-conditional.sh "$PILOT" "$PILOT_UNCOND"
 Pilot 失败时保留 config snapshot、history、validation、checkpoint 和日志并停止。不得自动
 延长 epoch、调 test、降低 gate 或把 pilot checkpoint 送入正式实验。
 
-## 8. Phase C-III 正式运行
+## 8. Phase C-III 正式运行（历史流程）
 
 只有 Pilot 全部通过后才允许开始。正式实验必须从新的随机初始化 unconditional 模型开始：
 
@@ -308,18 +309,21 @@ greedy 和 sampled 必须分开命名、保留和报告。训练与 best 选择�
 
 ## 9. Phase D 与最终报告
 
-Phase C-III 完成后的审计结果为：
+Phase C-III 的历史审计结果为：
 
 - v3 greedy 相对 v2 的 Pattern Accuracy 提高 `0.2698`，Smatch 提高 `0.0585`；
 - Jaccard 下降 `0.0609`，Dice 和 Overlap 也下降，不能表述为全面改善；
 - parse 从 `0.9183` 变为 `0.9243`，EOS 保持 `1.0`，max-length rate 保持 `0`；
-- Phase D 是否值得执行仍需根据“condition adherence 改善但集合重合下降”的取舍决定。
+- 当时 Phase D 是否值得执行仍需根据“condition adherence 改善但集合重合下降”的取舍决定。
 
-如果进入 Phase D，GRPO 必须使用 v3 同一 selected checkpoint、base train 和 fixed test，
-并与 v3 SFT-only 配对。禁止用 v2 checkpoint 作为正式对照的 parent。
+Phase C-IV 已把这一决策更新为：**值得从 C-IV conditional-best 进入 GRPO，但本任务没有
+执行 GRPO。** Phase C-IV 在只扩大训练数据的条件下同时显著提高集合重合和控制能力，
+形成比 v3 更合适的 SFT parent。若后续明确授权 Phase D，必须冻结使用
+`repro-wn-pattern-full-train-author-aligned-c4/conditional-best`，并与 C-IV SFT-only 配对；
+禁止使用 v2、v3 或 pilot checkpoint 作为正式 parent。
 
 最终导师报告至少包括配置来源差异、精确 SHA/环境、数据 hash/count、运行时间和显存、
-greedy/sampled 五项指标、v2/v3/论文对照、失败项与单 seed 局限。
+greedy/sampled 五项指标、v2/v3/C-IV/论文对照、失败项与单 seed 局限。
 
 ## 10. 产物纪律与接手顺序
 
@@ -335,13 +339,40 @@ greedy/sampled 五项指标、v2/v3/论文对照、失败项与单 seed 局限�
 后续 agent 的固定顺序：
 
 1. 阅读本文和 `worklogs/phase-c-2026-08-10.md`；
-2. 用 `worklogs/phase-c-2026-08-10.md` 第 4.1 和第 6 节的路径/hash 核验 v3 原始证据；
-   DSW 当前已停止，不要为只读文档工作重启实例；
-3. 决定 Phase D 的目标和成功口径；若不进入，直接整理最终报告；
-4. 若明确授权 Phase D，重启 DSW 后核对 checkout、manifest 和 v3 `conditional-best`，
-   并以它作为唯一正式 parent；
-5. Phase D 完成后与 v3 SFT-only 配对比较，再形成最终报告。
+2. 用 `worklogs/phase-c-2026-08-10.md` 第 8 节的路径/hash 核验 C-IV 原始证据；
+   DSW 收尾后应为 `Stopped`，不要为只读文档工作重启实例；
+3. 若明确授权 Phase D，先冻结 GRPO 的目标、成功口径和一次 test 契约；
+4. 重启 DSW 后核对 checkout、manifest 和 C-IV `conditional-best`，并以它作为唯一正式
+   parent；
+5. Phase D 完成后与 C-IV SFT-only 配对比较，再形成最终报告。
 
-当前边界是：**三次 Phase C 均已归档；第三次 author-aligned small 已通过 Pilot、正式
-50+50、固定 test 和完整审计。Phase D 尚未执行或获得本轮授权，论文绝对数值复现结论
-仍不成立。**
+当前边界是：**四次 Phase C 均已归档；C-IV author-scale full train 已通过 pilot、正式
+50+50、一次 frozen test 和完整审计。扩大数据显著改善语义集合指标并保持、强化控制
+能力，支持“覆盖不足是当前主要瓶颈”；但仍有论文语义差距和单 seed 局限。Phase D 尚未
+执行，论文绝对数值复现结论仍不成立。**
+
+## 11. Phase C-IV 决策摘要
+
+Phase C-IV 保持 v3 的 random GPT-2 6×768、12 heads、Adam、LR `5e-5`、batch 160、
+5 optimizer-step warm-up 后恒定、50+50 epoch、WN18RR/pattern/seed 42 和 checkpoint
+selection，仅把 base train 从每 pattern 1,024 条扩大为 8,000 条。train-only augmentation
+使 unconditional merged count 为 204,610；conditional 固定 104,000 条。跨 split 的完整
+监督 tuple 重合为 0，valid/test 与 v3 对应文件逐字节相同。
+
+实体 target 的 train vocabulary 覆盖从 `14,361/40,559 = 35.41%` 提高到
+`33,200/40,559 = 81.86%`；valid/test unseen entity occurrence rate 分别从
+`28.25%/27.70%` 降至 `3.03%/3.34%`。relation target 始终为 `22/22`，valid/test unseen
+均为 0。因此本轮扩大规模确实改变了实体覆盖，而不是 validation/test 或关系词表。
+
+正式 frozen test 为：
+
+| decoding | Jaccard | Dice | Overlap | Pattern Accuracy | Smatch | Parse | EOS | 五项均值 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| greedy | 0.5969 | 0.6447 | 0.7149 | 0.9441 | 0.8196 | 0.9952 | 1.0000 | 0.7440 |
+| sampled | 0.5517 | 0.5960 | 0.6620 | 0.9459 | 0.8153 | 0.9946 | 1.0000 | 0.7142 |
+
+greedy 相对 v3 的 Jaccard/Dice/Overlap/Pattern Accuracy/Smatch 分别提高
+`+0.3279/+0.3454/+0.3656/+0.3558/+0.1583`；相对论文 w/o RL，前三项仍低
+`-0.1181/-0.1133/-0.1221`，但 Pattern Accuracy 和 Smatch 已高
+`+0.1291/+0.0296`。这构成“覆盖不足是当前主要瓶颈”的强单变量证据，但不表示它是唯一
+瓶颈；`pin`、`inp`、union sampled 和长结构仍是后续优化重点。
