@@ -28,6 +28,14 @@ V3_GREEDY = {
     "jaccard": 0.2690, "dice": 0.2993, "overlap": 0.3493,
     "condition_accuracy": 0.5883, "smatch": 0.6613,
 }
+V2_SAMPLED = {
+    "jaccard": 0.2419, "dice": 0.2622, "overlap": 0.2930,
+    "condition_accuracy": 0.3191, "smatch": 0.5987,
+}
+V3_SAMPLED = {
+    "jaccard": 0.2071, "dice": 0.2263, "overlap": 0.2580,
+    "condition_accuracy": 0.5787, "smatch": 0.6478,
+}
 PAPER_WITHOUT_RL = {
     "jaccard": 0.715, "dice": 0.758, "overlap": 0.837,
     "condition_accuracy": 0.815, "smatch": 0.790,
@@ -394,6 +402,11 @@ def _summarize_group(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def audit_evaluation(config: ExperimentConfig) -> dict[str, Any]:
     run_root = config.runtime_paths["run_root"] / config.experiment["name"]
+    manifest = json.loads(config.sampling_manifest_path.read_text(encoding="utf-8"))
+    raw_test = _load_artifact(
+        config.sampling_manifest_path, manifest["artifacts"]["base"]["test"]
+    )
+    pattern_names = _pattern_names()
     reports = {}
     for decode in ("greedy", "sampled"):
         jsonl_path = run_root / f"test-{decode}.jsonl"
@@ -409,14 +422,20 @@ def audit_evaluation(config: ExperimentConfig) -> dict[str, Any]:
             if not math.isclose(value, published[name], abs_tol=1e-12):
                 raise ValueError(f"{decode} CSV mismatch for {name}: {value} != {published[name]}")
         by_pattern: dict[str, list[dict[str, Any]]] = {}
-        for record in records:
-            pattern = record["condition"]["value"]
+        for index, record in enumerate(records):
+            pattern = pattern_names[raw_test[index]["pattern_str"]]
             by_pattern.setdefault(pattern, []).append(record)
         reference_lengths = sorted(len(record["reference"].split()) for record in records)
         long_threshold = reference_lengths[math.ceil(0.75 * len(reference_lengths)) - 1]
         groups = {
-            "union": [record for record in records if "u" in record["condition"]["value"].split()],
-            "negation": [record for record in records if "n" in record["condition"]["value"].split()],
+            "union": [
+                record for index, record in enumerate(records)
+                if "(u," in raw_test[index]["pattern_str"]
+            ],
+            "negation": [
+                record for index, record in enumerate(records)
+                if "(n," in raw_test[index]["pattern_str"]
+            ],
             "long_structure": [record for record in records if len(record["reference"].split()) >= long_threshold],
         }
         reports[decode] = {
@@ -431,8 +450,8 @@ def audit_evaluation(config: ExperimentConfig) -> dict[str, Any]:
             "deltas": {
                 baseline: {name: aggregate[name] - values[name] for name in PAPER_METRICS}
                 for baseline, values in (
-                    ("v2_greedy", V2_GREEDY),
-                    ("v3_greedy", V3_GREEDY),
+                    (("v2_greedy", V2_GREEDY) if decode == "greedy" else ("v2_sampled", V2_SAMPLED)),
+                    (("v3_greedy", V3_GREEDY) if decode == "greedy" else ("v3_sampled", V3_SAMPLED)),
                     ("paper_without_rl", PAPER_WITHOUT_RL),
                 )
             },
