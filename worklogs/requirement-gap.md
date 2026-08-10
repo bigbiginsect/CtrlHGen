@@ -142,6 +142,7 @@ scheduler:
 ```text
 akgr/configs/reproduce/wn-pattern-small-author-aligned.yml
 experiment: repro-wn-pattern-small-author-aligned-v3
+semantic hash: 0fde2887a211b4deaa7075edf97a1d1e9d3ac93466950bb03f9b5957e1a18796
 ```
 
 关键参数：
@@ -162,6 +163,7 @@ experiment: repro-wn-pattern-small-author-aligned-v3
 ```text
 akgr/configs/diagnostics/wn-pattern-small-author-pilot.yml
 experiment: diagnostic-wn-pattern-small-author-pilot-v1
+semantic hash: b417a2fb7fd1284e7d1e9a96f27d88b7d2a056fe4a0550c499a0bc1b6219af40
 ```
 
 Pilot 使用相同模型和训练动力学，但两阶段各 10 epoch，每 2 epoch 验证和保存，自动健康
