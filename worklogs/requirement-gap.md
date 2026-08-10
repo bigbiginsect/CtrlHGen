@@ -6,7 +6,9 @@
 >
 > 运行原则：以 `git rev-parse HEAD` 的精确 SHA 为准；本地修改、提交并推送，DSW 只部署该 SHA。
 
-这份文档是后续 agent 的主要交接入口。早期 requirement gap 已基本完成，因此只保留结果摘要；尚未执行的 Phase C、D、E 保留完整计划、门槛和命令。
+这份文档是后续 agent 的路线入口。Phase C 的两次实际运行、配置、指标轨迹和原始证据
+索引已单独记录在 `worklogs/phase-c-2026-08-10.md`；本文第 5 节保留的是运行前计划和
+门槛，阅读时应结合该结果日志，不能再把它当成“尚未启动”的当前状态。
 
 ## 1. 一页交接结论
 
@@ -14,11 +16,13 @@
 |---|---|---|
 | Phase A：复现基础设施 | 已完成 | 数据、模型、checkpoint、评估、脚本和自动测试已经闭环 |
 | Phase B：tiny 与根因诊断 | 已完成 | 全链路已跑通；旧 Phase C 的 conditional 失败根因已定位并修复 |
-| Phase C：small SFT-only | 可重新运行，尚未启动 | 必须从随机初始化重新训练，不能复用旧 run 或旧 checkpoint |
-| Phase D：small GRPO | 未执行 | 只有 Phase C 的 `conditional-best` 通过健康门槛后才能开始 |
-| Phase E：验收报告 | 未执行 | Phase C/D 结果齐备后形成论文设置、缩放设置和指标对照 |
+| Phase C：small SFT-only | 已完成一次修复后运行 | 无条件于 311 epoch cost-aware early stop，conditional 完成 50 epoch；结果与证据见独立日志 |
+| Phase D：small GRPO | 未执行 | 健康 `conditional-best` 已产生；是否继续应先明确 small 相对趋势或论文绝对数值的目标 |
+| Phase E：验收报告 | 部分完成 | Phase C 实验记录已形成；尚无 Phase D、多 seed 或最终导师版报告 |
 
-当前代码和数据已经具备重跑 Phase C 的条件。后续 agent 不需要重新调查历史 requirement gap，也不需要重新采样；先核对 Git/DSW SHA 和 manifest，再按第 5 节启动无条件 SFT。
+当前保留第一次失败 run、修复诊断和第二次完整 small-v2 SFT-only run。后续 agent 应先读
+`worklogs/phase-c-2026-08-10.md`、核对其中 hash，并根据待验证假设决定做分层分析、扩大
+数据、重跑 SFT 或进入 GRPO；不应机械地按第 5 节重新启动同一实验。
 
 严禁使用以下失败实验及其中任何 checkpoint：
 
@@ -369,7 +373,8 @@ Phase E 也不是已完成工作。它应在 Phase C 完成后先形成 SFT-only
 验收层级：
 
 - **代码跑通**：tiny 数据→两阶段 SFT→checkpoint 恢复→test→tiny GRPO→恢复评估全部成功；当前已达到。
-- **最低复现**：完成 Phase C，并在固定 WN18RR test 上报告 SFT-only 五项指标；当前尚未达到。
+- **最低复现（原工程定义）**：修复后的 Phase C 已完成，并在固定 WN18RR test 上报告
+  SFT-only 五项指标；但该定义只证明缩小规模流程可审计完成，不等于复现论文绝对数值。
 - **推荐复现**：完成 Phase C+D 的配对比较，最好再做 3 seeds；当前尚未达到。
 
 报告结论必须使用“缩小规模流程/趋势复现”措辞。单张 L20、small 数据、单 seed 的结果不能包装成论文绝对数值复现。
@@ -423,7 +428,14 @@ git rev-parse HEAD
 
 ## 10. 后续 agent 的执行顺序
 
-后续 agent 读取 `AGENTS.md` 和本文档后，按下面顺序接手：
+以下 1--8 是 Phase C 运行前的原计划，现作为历史执行协议保留。Phase C 已实际完成，
+后续接手顺序改为：
+
+1. 阅读 `worklogs/phase-c-2026-08-10.md`，核验两次 run 的文件 hash 和配置差异。
+2. 先提出待检验假设，再决定做逐 pattern/覆盖率分析、full-scale SFT 或 small GRPO。
+3. 若启动新实验，继续遵守本文的 SHA、manifest、健康 best、独立 test 和产物纪律。
+
+原计划如下：
 
 1. 核对本地、origin、DSW 的精确 SHA 和 clean status。
 2. 核对 small manifest 的 schema、hash 和数量，不重新采样。
@@ -434,4 +446,6 @@ git rev-parse HEAD
 7. 汇报 Phase C 指标和健康证据；满足第 5.6 节后再按第 6 节进行 GRPO。
 8. 完成 Phase D 配对评估，再按第 7 节形成导师验收报告。
 
-当前最重要的边界是：**Phase C 已准备好但尚未运行；Phase D/E 仍是必须保留的后续工作，而不是已完成或可跳过的内容。**
+当前边界是：**Phase C 的修复后 small SFT-only run 已完成，但绝对指标没有接近论文
+参照；Phase D、多 seed、full-scale 验证和最终导师报告均未完成。现有证据支持多种后续
+假设，不应把数据规模或任何单一因素预先写成已证实根因。**
