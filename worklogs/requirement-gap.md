@@ -1,612 +1,437 @@
-# CtrlHGen 复现 Requirement Gap 与后续执行交接
+# CtrlHGen 复现现状、路线图与执行交接
 
 > 状态日期：2026-08-10（Asia/Shanghai）
 >
-> 当前维护分支：`codex/reproduction-pipeline`（运行前以 `git rev-parse HEAD` 记录精确 SHA）
-> 文档目的：说明“当前代码距离跑通和满足导师复现要求还缺什么”，并让后续 agent 不必重新调查即可继续实施。
+> 当前分支：`codex/reproduction-pipeline`
+>
+> 运行原则：以 `git rev-parse HEAD` 的精确 SHA 为准；本地修改、提交并推送，DSW 只部署该 SHA。
 
-## 1. 任务目标与推荐结论
+这份文档是后续 agent 的主要交接入口。早期 requirement gap 已基本完成，因此只保留结果摘要；尚未执行的 Phase C、D、E 保留完整计划、门槛和命令。
 
-导师要求是：
+## 1. 一页交接结论
 
-> 复现：跑通代码，并复现论文中至少一个关键实验/指标；如因算力需要缩小规模可以，但必须说明与论文设置的差异。
+| 阶段 | 状态 | 结论 |
+|---|---|---|
+| Phase A：复现基础设施 | 已完成 | 数据、模型、checkpoint、评估、脚本和自动测试已经闭环 |
+| Phase B：tiny 与根因诊断 | 已完成 | 全链路已跑通；旧 Phase C 的 conditional 失败根因已定位并修复 |
+| Phase C：small SFT-only | 可重新运行，尚未启动 | 必须从随机初始化重新训练，不能复用旧 run 或旧 checkpoint |
+| Phase D：small GRPO | 未执行 | 只有 Phase C 的 `conditional-best` 通过健康门槛后才能开始 |
+| Phase E：验收报告 | 未执行 | Phase C/D 结果齐备后形成论文设置、缩放设置和指标对照 |
 
-本项目建议采用“缩小规模关键实验复现”，而不是承诺整篇论文的数值级复现：
+当前代码和数据已经具备重跑 Phase C 的条件。后续 agent 不需要重新调查历史 requirement gap，也不需要重新采样；先核对 Git/DSW SHA 和 manifest，再按第 5 节启动无条件 SFT。
 
-1. 先修复并跑通一条完整链路：知识图谱准备 → query sampling → 无条件 SFT → 条件 SFT → checkpoint 恢复 → 测试评估。
-2. 以 **WN18RR + pattern condition** 为主实验，复现论文 Table 3 中 `w/o RL` 与完整 `CtrlHGen` 的 GRPO 消融。
-3. 以 **Pattern Accuracy** 为主验收指标，同时报告 Jaccard、Dice、Overlap、Smatch。
-4. 单张 L20 上缩减每类 query 数和训练 epoch；保留相同数据集、13 种逻辑类型、最大 observation size 32、12 层 decoder-only 模型、奖励定义和评测方法。
-5. 如果预算只够完成一个阶段，最低可交付是 Table 3 的 `CtrlHG (w/o RL)` 行对应的缩小规模 SFT-only 指标；更稳妥的交付是再加入 GRPO，并复现“GRPO 提升条件遵循率”的趋势。
+严禁使用以下失败实验及其中任何 checkpoint：
 
-这里的“复现”应表述为：**在明确列出的缩放设置下复现实验流程、指标计算和关键趋势**。除非以后使用完整论文设置并做多随机种子实验，否则不要声称复现了论文的绝对数值。
+```text
+/mnt/workspace/ctrlhgen-runs/repro-wn-pattern-phase-c-seed42-20260809-111557
+```
 
-### 1.1 2026-08-10 Phase C 失败的根因与处置
+它不是一个“多训一些 epoch 就能恢复”的模型。旧 conditional 训练实际把 target 和 `END` mask 掉了，继续训练只会进一步拟合错误标签。
 
-失败 run：`/mnt/workspace/ctrlhgen-runs/repro-wn-pattern-phase-c-seed42-20260809-111557`。
-最初观察到无条件 best 的验证 parse 约 11%，conditional 与 test 则是 0% EOS、0% parse。训练预算不足确实解释了无条件模型较弱，但**不是 conditional 永不停止的根因**。
+## 2. 复现目标与论文对照
 
-已用完整 12 层模型、真实 WN18RR 数据和 checkpoint round-trip 复现并定位：
+导师要求是：跑通代码，并复现论文中至少一个关键实验或指标；如因算力缩小规模，必须说明与论文设置的差异。
 
-1. validation generation 临时把 fast tokenizer 切为 left padding。Python 属性虽然恢复为 right，Rust backend 仍保留最后一次 left-padding 状态；紧接着 `save_pretrained()` 把它写入了 tokenizer JSON。
-2. conditional 从无条件 checkpoint 加载后得到 left-padding tokenizer。训练 pair 和用于 label mask 的 prompt 都左对齐，但长度不同，mask 因而覆盖 target 与 `END`，反而把 source/condition 留成 active labels。
-3. 直接检查旧 conditional checkpoint 的 16 条训练 batch 得到 `eos labels = 0`；即使训练 100 epoch、loss 降到 `0.006`，greedy 仍必然是 0% EOS。这证明继续加 epoch 无法修复该 run。
-4. 修复后，每条 active label 严格等于 `target + END`。相同的 104 条真实数据诊断中，conditional 从 epoch 5 起 EOS rate 即为 100%；最终 checkpoint 在训练集上 teacher-forced token/sequence/EOS accuracy、prompt-only first-token accuracy、greedy parse 与 greedy EOS 全为 100%。
+本项目的主实验固定为 **WN18RR + pattern condition**，对应论文 Table 3 的 SFT-only（`w/o RL`）与完整 CtrlHGen 对照。主指标是 Pattern Accuracy，同时报告 Jaccard、Dice、Overlap、Smatch。
 
-配套修正包括：
+建议采用的表述是：
 
-- 条件分隔符改为独立 `COND`，固定序列为 `answers COND condition SEP target END`；
-- training batch 强制 right padding，generation-only left padding 不得污染 backend；
-- checkpoint format v2 哈希 tokenizer JSON 并校验 padding、SEP、EOS pair 模板，旧 checkpoint 会被拒绝；
-- validation 记录 EOS rate、生成长度和 max-length rate，未过 parse/EOS 门槛的 checkpoint 不能成为 best，也不能进入下一阶段或 GRPO；
-- best 选择优先 generation-level parse/condition 指标，不再让低 validation loss 单独选中不可用模型；
-- 无条件阶段使用 merged augmentation，conditional/GRPO 使用按 pattern 平衡的 base train；
-- `semantic_hash`、`data_hash`、`kg_hash` 分离，改训练预算不再重建完全相同的数据；
-- small 配置恢复论文的 400+50 epoch SFT 日程，只缩放每 pattern 样本数，避免同时缩数据和缩优化步数。
-- L20 实测最复杂 conditional batch `256 x 52` 峰值显存 19.75 GiB、一步 0.62 秒；small/full 因而直接使用 micro-batch 256、accumulation 1，保持论文 effective batch 256，并把预计 Phase C 墙钟时间降到约 6–8 小时。
+> 在单张 L20 和明确缩小的 query 样本规模下，复现 CtrlHGen 的完整训练/评估流程与 SFT→GRPO 的关键趋势。
 
-因此，旧 Phase C checkpoint **不可续训或用于 Phase D**。必须从 format-v2 无条件模型重新开始；正式 small run 先以 greedy validation 的 `parse_ok >= 0.90`、`eos_rate >= 0.98` 为阶段门槛。
+除非以后补齐论文规模和多随机种子，不能声称复现了论文绝对数值。
 
-## 2. 已核实的当前状态
+论文 Table 3 的比较基准为：
 
-### 2.1 Git 与 DSW
-
-- 本地 checkout：`/mnt/d/yang_nankai/CtrlHGen`
-- DSW checkout：`/mnt/workspace/CtrlHGen`
-- 本地 `main` 与 DSW detached HEAD 都在 `0225585dc897455b2c216da26f9ace1adc588415`。
-- 调查时两边工作区均干净；本地源代码相对 `upstream/main` 没有功能修改，只有仓库卫生、工作说明、论文和占位目录等私有工作仓库改动。
-- DSW：Python 3.11.11、PyTorch 2.6.0+cu124、Transformers 4.50.2、TRL 0.16.0、Datasets 3.5.0。
-- DSW：1 张 NVIDIA L20，约 46 GB 显存；`/mnt/workspace` 约有 195 GB 可用空间。
-- `python -m akgr.abduction_model.main --help` 和 sampling 模块的 `--help` 可以在 DSW 正常导入并显示参数。这只证明 import/参数解析可用，不代表训练链路已跑通。
-
-### 2.2 当前没有复现实验产物
-
-本地和 DSW 的以下仓库目录都只有 `.gitkeep`：
-
-- `sampled_data/`
-- `checkpoints/`
-- `results/`
-
-DSW 规划的持久化目录 `/mnt/workspace/ctrlhgen-data` 和 `/mnt/workspace/ctrlhgen-checkpoints` 尚不存在。当前没有：
-
-- 已固定的数据划分；
-- sampled query JSONL；
-- 模型 checkpoint；
-- 正式训练日志；
-- 逐样本预测；
-- 论文指标 CSV。
-
-因此截至本文档日期，项目还不能称为“代码已跑通”。
-
-### 2.3 已做而未继续做的调查动作
-
-- 已阅读当前 README、所有主要配置、sampling/SFT/GRPO/evaluation 入口以及主要 shell scripts。
-- 已对照论文实验章节和附录（当前 arXiv v3）：<https://arxiv.org/html/2505.20948>。
-- 已做只读或轻量检查，没有下载知识图谱、没有正式采样、没有启动训练、没有占用长时间 GPU。
-- 已实测 `pip install --dry-run --no-index -r requirements.txt` 会因 Conda 格式在 `_libgcc_mutex=0.1=main` 处失败。
-- 已在 DSW 直接调用 `create_transformer(...)`，确认因缺少 `./hug_model/config.json` 报 `OSError`。
-
-## 3. 论文目标设置与建议缩放设置
-
-论文明确说明：
-
-- 数据集：DBpedia50、WN18RR、FB15k-237；KG 按 8:1:1 构建递增的 train/valid/test 图。
-- 13 种预定义逻辑类型；每个 observation 不超过 32 个实体。
-- 子逻辑分解应用于 `up, 3in, pni, pin, inp` 五种复杂模式。
-- 指标：Jaccard、Dice、Overlap、condition Accuracy、Smatch。
-- 模型：12 层 decoder-only Transformer，优化器 AdamW。
-- 硬件：4 张 NVIDIA A6000 48GB。
-- SFT：batch size 256；无条件阶段 400 epoch、50 epoch warm-up；条件阶段 50 epoch、5 epoch warm-up；learning rate `1e-5`。
-- RL：batch size 32；每组 4 个候选；语义奖励权重 `lambda=(1.0, 0.5, 0.5)`；`alpha=0.5` 平衡语义和条件奖励。
-
-建议首轮正式复现配置如下。样本数和 epoch 是算力缩放，不是论文原设置，报告中必须单列：
-
-| 项目 | 论文设置 | 建议首轮设置 | 处理原则 |
-|---|---|---|---|
-| 数据集 | WN18RR（目标实验） | WN18RR | 保持一致 |
-| 逻辑模式 | 13 类 | 13 类 | 保持一致 |
-| 子逻辑分解 | 5 类复杂模式 | 相同 5 类 | 保持一致 |
-| 最大 observation | 32 | 32 | 保持一致 |
-| 每类样本数 | 论文未披露；代码 `full` 也不能可靠代表论文 | train/valid/test = 1024/128/128 | 明确为缩放设置 |
-| 模型 | 12 层 decoder-only | 优先保留 12 层 | 保持层数；显存不足再讨论 |
-| optimizer | AdamW | AdamW | 保持一致 |
-| effective batch | SFT 256，RL 32 | 尽量保持；用 micro-batch + gradient accumulation | 保持有效 batch |
-| SFT epoch | 400 + 50 | 400 + 50；只缩样本规模，不再同时缩优化日程 | 保持论文日程 |
-| GRPO group size | 4 | 4 | 保持一致 |
-| GRPO epoch | 论文正文未完整披露 | 初始 1–3 | 明确记录 |
-| GPU | 4×A6000 48GB | 1×L20 46GB | 明确为硬件差异 |
-| 随机种子 | 论文未披露 | 至少 1 个固定 seed；最好 42/43/44 三个 | 提升可审计性 |
-
-建议对照的论文数值：
-
-| Table 3 设置 | Jaccard | Dice | Overlap | Accuracy | Smatch |
+| 设置 | Jaccard | Dice | Overlap | Pattern Accuracy | Smatch |
 |---|---:|---:|---:|---:|---:|
 | CtrlHG (w/o RL) | 71.5 | 75.8 | 83.7 | 81.5 | 79.0 |
 | CtrlHGen | 77.0 | 80.8 | 86.8 | 93.5 | 83.3 |
 
-缩小规模实验不以进入论文误差范围为硬性成功条件。更合理的成功条件是：流程和指标定义一致，实验可重复，并且 GRPO 相对相同缩放设置的 SFT-only 在 Pattern Accuracy 上产生可解释的改善。若趋势未出现，也必须如实报告，不能调参到只保留有利结果。
+缩放实验不以落入论文误差范围为硬性成功条件。合理的成功口径是：流程和指标定义一致、实验可审计可重复，并判断 GRPO 相对同一 small SFT checkpoint 是否改善条件遵循率；若没有改善也应如实报告。
 
-## 4. Requirement Gap：当前代码距离“跑通”还缺什么
+## 3. 旧 Phase C 失败的真实根因
 
-下面 P0 是正式实验开始前必须解决的阻断项；P1 是导师验收前必须完善的复现性问题；P2 是完整性或工程质量问题。
+最初只看到无条件模型验证 parse 约 11%，conditional 与 test 为 0% EOS、0% parse，因此“随机初始化模型训练预算不足”是一个合理表象，但它不是 conditional 永不终止的主因。
 
-### P0-1：环境安装说明不可执行
+在完整 12 层模型、真实 WN18RR 数据和 checkpoint round-trip 上，最终定位到：
 
-**证据**
+1. validation generation 临时把 fast tokenizer 改为 left padding。
+2. Python 层虽恢复为 right padding，Rust tokenizer backend 仍保留 left-padding 状态，随后被 `save_pretrained()` 写入 checkpoint 的 tokenizer JSON。
+3. conditional 从该 checkpoint 加载 left-padding tokenizer。训练 pair 与用于构造 label mask 的 prompt 长度不同，mask 错位后覆盖 target 和 `END`，反而保留 source/condition 为 active labels。
+4. 旧 conditional checkpoint 的训练 batch 中 `END` active label 数量为 0。即使训到 100 epoch、loss 降到 `0.006`，模型也不可能学会输出 EOS。
 
-- README 要求 `pip install -r requirements.txt`。
-- `requirements.txt` 是 `conda list --export` 风格，包含 `_libgcc_mutex=0.1=main` 和 `torch=2.6.0+cu118=pypi_0`，不能作为 pip requirements 使用。
+因此旧 run 同时存在两个问题：无条件阶段确实训练不足；conditional 阶段则是确定性的监督标签错误。后者才是 0% EOS 的根因。
 
-**需要实现**
+已完成的修复包括：
 
-- 提供一种真正可执行且验证过的环境定义：建议增加精简的 `environment.yml` 或 `requirements-pip.txt`，不要机械复制完整 Conda 环境。
-- 至少锁定 Python、PyTorch/CUDA、Transformers、TRL、Datasets、PyKEEN、smatch、NLTK、Accelerate、W&B 等直接依赖。
-- README 中的安装命令必须在一个干净环境中验证。
-- 记录 DSW 实际环境与论文/README Python 3.9 的差异。当前 DSW Python 3.11 可导入代码，但这不是环境可重建证据。
+- 条件格式固定为 `answers COND condition SEP target END`，`COND` 是独立 token；
+- training batch 强制 right padding；generation-only left padding 被限制在作用域内，并显式清理 backend padding 状态；
+- active labels 必须严格等于 `target + END`；
+- checkpoint format v2 哈希 tokenizer JSON，并验证 padding、特殊 token 和 pair 模板；旧 format-v1 checkpoint 会被拒绝；
+- validation 记录 parse、EOS、生成长度和 max-length rate；未通过健康门槛的 checkpoint 不能被选为 best，也不能进入下一阶段；
+- best 选择优先 generation-level 指标，validation loss 不能单独选中不可用模型；
+- 无条件 SFT 使用 merged augmentation；conditional SFT 和 GRPO 使用 pattern 平衡的 base train；
+- `semantic_hash`、`data_hash`、`kg_hash` 分离，调整训练预算不会触发相同数据的重采样。
 
-**验收**
+真实数据的修复后诊断证据位于：
 
-- 新环境执行安装命令成功。
-- `python -m akgr.abduction_model.main --help`、sampling help 和最小单元测试成功。
+```text
+/mnt/workspace/ctrlhgen-runs/diagnostic-wn-pattern-overfit-v7/
+/mnt/workspace/ctrlhgen-checkpoints/diagnostic-wn-pattern-overfit-v7/
+```
 
-### P0-2：模型配置模板 `./hug_model` 缺失
+诊断结果：
 
-**证据**
+- conditional 从 epoch 5 开始 EOS rate 为 100%；
+- 对 104 条训练样本，teacher-forced token/sequence/EOS accuracy、prompt-only first-token accuracy 与 prompt agreement 均为 1.0；
+- 同一训练集 greedy parse/EOS 均为 1.0；
+- tiny valid 的无条件 best greedy parse 为 0.731、EOS 为 1.0；conditional best greedy parse 为 0.462、EOS 为 1.0。
 
-- `akgr/abduction_model/transformer.py` 用 `GPT2Config.from_pretrained('./hug_model', ...)`。
-- 仓库和 Git 历史中没有 `hug_model/config.json`。
-- DSW 实测模型初始化报 `OSError: Can't load the configuration of './hug_model'`。
-- `config-model.yml` 写的是 `num_layers: 6`，但 Hugging Face GPT2Config 的有效层数字段是 `n_layer`；实测传入 `num_layers=6` 时 `n_layer` 仍为默认 12。因此当前文件既不能证明实际是 6 层，也不能完整定义论文的 12 层模型。
+这些结果证明监督、保存/加载和生成链路已经恢复；它们是诊断结果，不是正式论文复现指标。
 
-**需要实现**
+## 4. 当前可复现基线
 
-- 不再依赖未提交的本地目录，改为在代码或 YAML 中显式构建 GPT2Config。
-- 论文只披露了 12 层，未披露所有宽度参数。建议先采用标准 GPT-2 small 默认结构（12 层、hidden size 768、12 heads）并显式记录；如从作者处获得原 `config.json`，再替换并保留来源/hash。
-- 明确是随机初始化结构配置，还是加载预训练权重。当前代码只读取 config 后新建 `GPT2LMHeadModel(config)`，看起来是随机初始化，不能悄悄改成预训练 GPT-2。
+### 4.1 正式 small 配置
 
-**验收**
+唯一正式配置入口：
 
-- 模型可离线初始化。
-- 日志打印的 `n_layer/n_embd/n_head/vocab_size` 与复现配置一致。
-- 保存一份模型配置 JSON 到每个 run 目录。
+```text
+akgr/configs/reproduce/wn-pattern-small.yml
+```
 
-### P0-3：README 的数据流程与 WN18RR 训练不闭合
+关键设置：
 
-**证据**
+| 项目 | small 实际设置 | 与论文关系 |
+|---|---|---|
+| 数据集/condition/seed | WN18RR / pattern / 42 | 主实验一致；论文 seed 未披露 |
+| 逻辑模式/最大 observations | 13 类 / 32 | 一致 |
+| 样本数（每 pattern） | train/valid/test = 1024/128/128 | 缩小；论文精确数量未披露 |
+| 子逻辑增强 | `up, 3in, pni, pin, inp`，仅 train | 复杂类型一致；仅 train 是防泄漏默认决策 |
+| 模型 | random GPT-2，12×768，12 heads，tied embeddings | 层数一致；标准 GPT-2 small 宽度是实现假设 |
+| SFT effective batch | 256 | 一致；L20 直接 micro-batch 256、accumulation 1 |
+| 无条件 SFT | 400 epoch，warmup 50，LR `1e-5` | 一致 |
+| conditional SFT | 50 epoch，warmup 5，LR `1e-5` | 一致 |
+| validation/checkpoint | 每 10 epoch greedy；每 25 epoch checkpoint | 本复现的可靠性补充 |
+| generation | `top_k=0, top_p=1, temperature=1`，max 33 | 按当前官方代码语义固定并记录 |
+| 硬件 | 1× NVIDIA L20 | 论文为 4×A6000 48GB |
 
-- `scripts/sample/sample_full.sh` 使用 `-s full`。
-- `config-sampling.yml` 的 `full.datasets` 只有 `DBpedia50`。
-- README 下一步却运行 `scripts/train/wn-g2.sh`，它需要 `WN18RR-full-32-*.jsonl`。
-- `scripts/sample/sample_server_wn.sh` 使用 profile `wn18rr only`，但该 profile 没有 sampling 代码必需的 `datasets` 和 `scale` 字段，会在 `config_sampling[args.scale]['scale']` 处失败。
-- FB15k-237 也没有一条闭合的 full sampling 路径。
+模型词表包括 40,559 个实体与 22 个方向关系 token。small 只缩小每类 query 数，没有再缩 SFT epoch 或 effective batch。
 
-**需要实现**
+L20 最复杂 conditional batch 实测形状约 `256 × 52`，峰值显存 19.75 GiB，每个 forward/backward/step 约 0.62 秒。完整 Phase C 预计约 6–8 小时，实际时间必须从日志记录。
 
-- 把 profile 定义统一成明确 schema，例如：`datasets`、每 split 每 pattern 的目标样本数、seed、输出 scale 名称。
-- 不要同时让 `scale` 表示配置名、除数和输出文件名。
-- 让 WN18RR small/debug/full profile 都能生成训练代码实际寻找的文件名。
-- README 为每个支持的数据集给出一条从零开始的命令。
+### 4.2 固定数据
 
-**验收**
+已生成且无需重采样的 schema-v2 manifest：
 
-- WN18RR tiny profile 生成 train/valid/test JSONL、`stats.txt` 和 KG cache。
-- 生成数量与配置逐类一致，文件名与 dataloader 查找路径一致。
+```text
+/mnt/workspace/ctrlhgen-data/WN18RR/small/seed-42/0f7d3531958a/sampling-manifest.json
+```
 
-### P0-4：sampling 配置中的显式样本数目前未被使用
+数量：
 
-**证据**
+| 数据 | 条数 |
+|---|---:|
+| base train | 13,312 |
+| valid | 1,664 |
+| test | 1,664 |
+| augmentation train | 12,945 |
+| merged unconditional train | 26,257 |
 
-- `config-sampling.yml` 中存在诸如 `train: 16/8000` 的数值。
-- `sample_parallel.py` 实际使用 `num_train_edges // scaling_factor` 计算每类数量，没有读取这些 split 数值。
+manifest 中应核对：
 
-**需要实现**
+- `data_hash` 前缀：`0f7d3531958a`
+- `kg_hash` 前缀：`ab2a80eabd45`
+- schema version：2
 
-- sampling profile 直接读取每 split 每 pattern 的目标数量。
-- 如需要保留 edge-ratio 模式，必须使用另一个明确字段并在日志中打印最终数量。
-- 给采样循环增加最大尝试次数和失败报告，避免某些 pattern 无限循环。
+若 manifest、数量或 hash 不符，停止运行并调查；不要覆盖现有数据后继续。
 
-**验收**
+### 4.3 已完成的基础设施和验证
 
-- tiny profile 的每类输出数量可由测试精确断言。
+早期 P0/P1 requirement gap 已落实为代码和测试，主要包括：
 
-### P0-5：知识图谱划分和采样不确定
+- 可安装环境与 DSW 路径约定；
+- 显式 GPT-2 config，不再依赖缺失的 `./hug_model`；
+- seeded KG split、采样 schema/profile、数据 manifest 和 hash；
+- 五类 sub-logic augmentation；
+- condition 编码、评分和五项 evaluation；
+- 两阶段 SFT、健康 best 指针、format-v2 checkpoint 与新进程恢复；
+- GRPO group/reward/config、checkpoint 和 resume；
+- `scripts/reproduce/` 的采样、SFT、评估和 GRPO 入口；
+- tiny CPU/GPU、真实数据 overfit、tokenizer round-trip 与 stage-transition 自动测试。
 
-**证据**
+功能代码基线曾在 DSW 完成全套测试：`90 passed`。正式运行前仍应在部署后的精确 SHA 上重跑测试或至少运行相关测试，不能只引用这一历史结果。
 
-- `load_kg_util.py` 对全量 triples 调用 Pandas `sample()` 重新做 8:1:1 划分，没有 `random_state`。
-- Python `random`、DataLoader shuffle、模型训练、generation 也没有统一 seed。
-- 第一次构建的 pickle 会固化一次随机划分，但没有 manifest 说明是哪一次。
+## 5. Phase C：small SFT-only 正式实验
 
-**需要实现**
+### 5.1 进入条件
 
-- 增加统一 `--seed`，设置 Python、NumPy、PyTorch、CUDA、Pandas sampling、Datasets/Trainer/DataLoader generator。
-- 持久化 split manifest：源数据版本、entity/relation/triple 数、split seed、各 split hash。
-- 同一数据 cache 不得在不同 seed 之间静默复用；路径或 metadata 必须包含 seed/config hash。
-- 记录确定性设置及其性能影响。
+启动前必须同时满足：
 
-**验收**
+1. DSW checkout 干净并处于本次提交的精确 SHA；
+2. 第 4.2 节 manifest 可读且 hash/count 一致；
+3. 没有把失败 run 的 checkpoint 作为 parent/resume；
+4. CUDA、磁盘和外部持久目录正常；
+5. 命令、SHA、环境、GPU、日志路径和进程状态有记录。
 
-- 同 seed 两次 tiny sampling 的 split hash 和 JSONL 内容 hash 一致。
-- 不同 seed 不会误读旧 cache。
+Phase C 必须从随机初始化的 format-v2 **无条件训练**开始。不要只重跑 conditional。
 
-### P0-6：checkpoint 恢复路径使用了字面量花括号
+### 5.2 DSW 环境
 
-**证据**
+```bash
+ssh ctrlhgen-dsw
+cd /mnt/workspace/CtrlHGen
+git status --short --branch
+git rev-parse HEAD
 
-- `load_model_by_mode()` 的普通和 tuning `resume_path` 字符串都缺少 `f` 前缀。
-- 所有条件训练、测试和多数 RL scripts 都依赖 `-r/--resume_epoch`。
+source /mnt/workspace/envs/ctrlhgen/bin/activate
+export CTRLHGEN_DATA_ROOT=/mnt/workspace/ctrlhgen-data
+export CTRLHGEN_CHECKPOINT_ROOT=/mnt/workspace/ctrlhgen-checkpoints
+export CTRLHGEN_RUN_ROOT=/mnt/workspace/ctrlhgen-runs
+export HF_HOME=/mnt/workspace/cache/huggingface
+export TRITON_CACHE_DIR=/mnt/workspace/cache/triton
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
-**需要实现**
+CONFIG=akgr/configs/reproduce/wn-pattern-small.yml
+```
 
-- 修复路径格式化。
-- 在真正加载前打印并校验绝对路径；不存在时给出可操作错误，列出可用 checkpoint，而不是等 `torch.load` 抛异常。
-- 统一 unconditional、conditional、RL checkpoint 命名，避免 `resume_epoch` 同时代表不同阶段。
+长任务可以使用 DSW 上可靠的会话管理方式，但必须把 stdout/stderr 和 PID/会话名写入独立 run 记录；不得让两次正式运行写入同一个实验目录。
 
-**验收**
+### 5.3 无条件 SFT
 
-- tiny SFT 保存 checkpoint 后，新进程能恢复并完成测试。
-- 条件 SFT 能从无条件 checkpoint 初始化。
+```bash
+bash scripts/reproduce/sft-unconditional.sh "$CONFIG"
+```
 
-### P0-7：两阶段 SFT 的 epoch 语义互相冲突
+预期 best 指针：
 
-**证据**
+```text
+/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/unconditional-best
+/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/unconditional-best.json
+```
 
-- `GPT2_6_act_nt` 在 `config-train.yml` 中只有 `nepoch: 50`。
-- README 推荐的无条件脚本因此训练 50 epoch，而论文是 400。
-- 条件脚本从 90、315、380 等 epoch 恢复；即使修好路径，`range(last_epoch+1, nepoch+1)` 在 `nepoch=50` 时为空，不会执行条件训练。
-- DB 无条件训练脚本本身还带 `-r=380`，但仓库没有此前 checkpoint。
+健康门槛：validation `parse_ok >= 0.90` 且 `eos_rate >= 0.98`。只有被 `unconditional-best.json` 选中并标记 `health_pass=true` 的 checkpoint 才能进入 conditional。
 
-**需要实现**
+如果训练结束仍没有 best 指针，或所有候选均未过门槛：**停止 Phase C**。保留日志和候选 checkpoint，分析 validation 曲线、EOS/长度/解析错误；不得用 final checkpoint 绕过门槛。
 
-- 将无条件 SFT 与条件 SFT 配置分开，例如 `unconditional_epochs` 和 `conditional_epochs`。
-- 条件阶段的 epoch 应是本阶段 1..N，不应继承无条件 checkpoint 的全局 epoch 作为循环起点。
-- checkpoint metadata 同时保存 `stage`、`stage_epoch`、`parent_checkpoint`、`global_step`。
-- optimizer 按论文改为 AdamW；是否继承第一阶段 optimizer/scheduler 必须明确。建议条件阶段重新创建 optimizer/scheduler。
+### 5.4 conditional SFT
 
-**验收**
+```bash
+UNCOND=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/unconditional-best
+bash scripts/reproduce/sft-conditional.sh "$CONFIG" "$UNCOND"
+```
 
-- tiny run 明确执行 N 个无条件 epoch 和 M 个条件 epoch，日志/文件名没有歧义。
+预期 best 指针：
 
-### P0-8：论文核心的子逻辑分解没有进入训练数据流水线
+```text
+/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/conditional-best
+/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/conditional-best.json
+```
 
-**证据**
+同样要求 `parse_ok >= 0.90`、`eos_rate >= 0.98` 和 `health_pass=true`。代码还会校验传入 parent 就是被选中的健康 `unconditional-best`，不能手工挑一个 loss 较低但生成无效的 checkpoint。
 
-- 分解逻辑位于独立的 `akgr/sampling/sample_add.py`，README 没有调用。
-- 脚本只保存 `new_src_1.pt/new_tgt_1.pt`，主 dataloader 只读取 `*-a2q.jsonl`，两者没有合并。
-- `device_name=1` 导致只处理固定的第 500000–999999 段。
-- `allow_pattern_dict=[5,9,10,11]` 与论文的 `[up=5, 3in=13, pni=9, pin=10, inp=4]` 不一致：遗漏 `3in` 和 `inp`，加入了 `2u`。
-- `add_id()` 使用硬编码相对文件且没有在 main 中调用。
+可在异常时做只读监督诊断：
 
-**需要实现**
+```bash
+python -m akgr.abduction_model.sft_diagnostics \
+  --experiment-config "$CONFIG" \
+  --checkpoint /path/to/checkpoint \
+  --split train
+```
 
-- 把分解作为正式、确定性的 dataset transform，而不是设备编号切片脚本。
-- 只对论文指定的五类复杂模式执行；为每种分解写单元测试。
-- 生成完整 record：`answers/query/pattern_str`，与原训练 JSONL 合并或生成独立 augmented JSONL，并记录原样本 ID/父 pattern。
-- 防止 train/valid/test 泄漏：论文描述的 augmentation 应用于训练数据时，sub-observation 必须在对应可见图上计算；首轮建议只增强 train，并在报告中说明。
-- 输出增强前后各 pattern 数量和 hash。
+诊断不能替代正式 validation/test，也不要在看过 test 后用它调参。
 
-**验收**
+### 5.5 固定测试集评估
 
-- tiny 数据中五类目标模式都产生合法 sub-logic 样本。
-- dataloader 实际读到增强后的样本；日志显示基础/增强数量。
+先做 greedy preflight，确认结构稳定：
 
-### P0-9：条件编码至少有一个明确错误
+```bash
+COND=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/conditional-best
+python -m akgr.abduction_model.main \
+  --experiment-config "$CONFIG" \
+  --mode testing \
+  --checkpoint "$COND" \
+  --test_split test \
+  --overwrite_batchsize 64 \
+  --greedy
+```
 
-**证据**
+再按配置进行论文式随机采样评估：
 
-- train、valid、test 的 `entitynumber` 分支调用了 `new_extract_sample_to_device_pattern()`，而不是 entity-number extractor。
-- 这会让所谓 entity-number control 实际输入 pattern condition。
+```bash
+bash scripts/reproduce/evaluate.sh "$CONFIG" "$COND"
+```
 
-**需要实现**
+greedy 和 sampled 结果必须分开命名和报告。Phase C 的正式 SFT-only 表格取固定 test split 的五项指标，同时保存逐样本 JSONL、aggregate CSV、generation 配置和 seed。
 
-- 改为正确的 entity-number extractor。
-- 为五类条件分别增加 tokenizer/extractor 测试：pattern、relation-number、entity-number、specific-entity、specific-relation。
-- 测试条件 token、target 和 condition-adherence scorer 使用相同定义。
+### 5.6 Phase C 完成定义
 
-**验收**
+只有以下条件全部满足，才能宣布 Phase C 完成并解锁 Phase D：
 
-- 每种条件给定手工样本时，编码 token 和 accuracy 判定符合论文定义。
+- 无条件与 conditional 都存在 selected healthy best；
+- 新进程能加载 conditional best；
+- greedy test 的 parse/EOS 未出现系统性退化；
+- sampled test 完成并保存五项指标及逐样本结果；
+- 没有使用 test 结果挑 checkpoint、改 seed 或调超参数；
+- SHA、manifest、配置快照、日志、checkpoint 和结果路径可追溯。
 
-### P0-10：evaluation 的 unconditional 分支会引用未定义变量
+## 6. Phase D：GRPO 正式实验
 
-**证据**
+Phase D 不是已完成工作。它当前被 Phase C 的健康 `conditional-best` 明确阻塞；在该门槛满足前，不能启动正式 GRPO。
 
-- unconditional extractor 不返回 `condition`。
-- `test_loop()` 随后无条件把 `condition_batch=condition` 传入评分函数。
+### 6.1 目标与固定设置
 
-**需要实现**
+Phase D 从 Phase C 的**同一个 selected conditional best**继续，使用同一个 base train 和固定 test split，与 SFT-only 做配对比较。
 
-- unconditional 使用不需要 condition 的评分路径，或显式传 `None` 并由 scorer 正确处理。
-- 增加每个 condition 的单 batch evaluation smoke test。
-- 保存逐样本 observation、condition、reference、prediction、五项分数、parse failure，而不只是 aggregate CSV。
+`wn-pattern-small.yml` 当前 GRPO 参数为：
 
-**验收**
+| 参数 | 值 |
+|---|---:|
+| data variant | base |
+| group size / `num_generations` | 4 |
+| per-device train batch | 32 |
+| epochs | 1 |
+| learning rate | `1e-5` |
+| beta | 0.1 |
+| epsilon | 0.2 |
+| max completion length | 33 |
+| save interval / keep | 100 steps / 2 |
+| reward weights | Jaccard 1.0、Dice 0.5、Overlap 0.5、condition 1.0 |
+| external reporting | disabled |
 
-- unconditional 和五种 conditional 测试均至少跑完一个 batch。
+这里应记录为 **1 epoch**，不是旧路线图中的“1–3 epoch”。任何 epoch、reward 或 KL 参数调整都必须形成新配置/实验名，不能覆盖首轮结果。
 
-### P0-11：GRPO 设置与论文/脚本不一致
+### 6.2 GRPO 前置诊断
 
-**证据**
+正式长任务前先在 held-out train examples 上检查：
 
-- 论文每组采样 4 个候选；当前 `GRPOConfig` 没有显式设置 `num_generations`，会依赖 TRL 版本默认值。
-- 论文整体奖励在忽略全局正比例缩放后可写作 `[Jaccard, Dice, Overlap, condition] = [1.0, 0.5, 0.5, 1.0]`。
-- README 推荐的单卡 WN script 使用 `[1.0, 1.0, 0.5, 0.0]`，把 condition reward 关闭了；这不对应完整 CtrlHGen。
-- multi-GPU WN script 的 `[1.0, 0.5, 0.5, 1.0]` 才与论文权重比例一致。
-- GRPO 默认 `report_to='wandb'`，没有说明认证、offline 或禁用方案。
-- `rl_minibatch/rl_horizon/rl_smatch_factor` 等部分 CLI 参数在 GRPO 路径未使用，scripts 容易造成“参数看似生效但实际无效”。
+- 四个 completion 是否产生非零的组内总 reward 方差；
+- semantic 三项和 condition reward 是否都能被计算；
+- parse/EOS/长度是否正常；
+- prompt/condition 与 Phase C 的 tokenizer contract 一致。
 
-**需要实现**
+若需要 `--max-steps 10` 的 GPU smoke，必须复制成独立 diagnostic 配置并使用独立 `experiment.name`/输出目录。不要在正式 `repro-wn-pattern-small-v2/grpo` 目录先跑 10 steps 再从头运行，否则 checkpoint 和 trainer state 会污染正式实验。
 
-- 显式设置 `num_generations=4`。
-- 用有名字的奖励配置代替 `eval('[...]')`；禁止不安全 `eval`。
-- 在日志中打印各奖励分量的 batch 均值和最终组合。
-- 完整实验使用论文比例；消融实验分别显式关闭 RL、Dice/Overlap、condition reward。
-- W&B 默认应允许 `--report_to none` 或 offline；正式 run 再按用户意愿启用。
-- 清理或验证所有 RL 参数，未使用参数应报错而不是静默忽略。
+若 reward 对所有 group 几乎恒定为 0、completion 基本不可解析或 EOS 崩溃，停止并诊断；不要靠延长 epoch 掩盖无学习信号。
 
-**验收**
+### 6.3 正式命令
 
-- tiny GRPO 跑完至少若干 step，group size 确认是 4，保存 checkpoint，并可在新进程加载评测。
+```bash
+COND=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/conditional-best
+bash scripts/reproduce/grpo.sh "$CONFIG" "$COND"
+```
 
-### P0-12：现有 shell scripts 绑定作者机器，不能直接用于单卡 DSW
+入口会强制校验 parent 正是 `conditional-best.json` 选中的健康 checkpoint。预期评估 checkpoint：
 
-**证据**
+```text
+/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-small-v2/grpo/evaluation-step-<global-step>
+```
 
-- scripts 硬编码 `CUDA_VISIBLE_DEVICES=1/2/3/4/6/7` 和 2/4 卡 accelerate。
-- DSW 只有物理 GPU 0；例如 `CUDA_VISIBLE_DEVICES=1` 会隐藏唯一 GPU，可能退回 CPU。
-- 部分旧 `optim-test` scripts 使用当前 argparse 已不存在的 `--ppo_*` 参数，属于旧 PPO 实验残留。
-- 个别 T5 script 含作者本机路径 `/home/data/ywangmy/checkpoint/`。
+训练中必须记录 total/component reward、组内 reward 方差、KL、completion 长度、parse/EOS、loss、global step、耗时和显存。如果实现日志尚未覆盖某项，先补足观测性再做长跑。
 
-**需要实现**
+### 6.4 GRPO 评估与停止条件
 
-- 新增独立、可配置的 `scripts/reproduce/`，不要把旧脚本当作可信实验入口。
-- 默认不在脚本内指定物理 GPU 编号；由调用环境设置，单卡内部统一使用逻辑 `cuda:0`。
-- 对 argparse 和 shell scripts 做静态一致性检查。
-- 明确区分 legacy PPO 与当前论文 GRPO，不把旧脚本纳入复现报告。
+对最终 GRPO evaluation checkpoint 使用与 Phase C 完全相同的 fixed test、greedy preflight 和 sampled evaluation。比较表必须配对展示：
 
-**验收**
+- SFT-only conditional best；
+- GRPO evaluation checkpoint；
+- 论文 `w/o RL` 与 CtrlHGen 数值（仅作尺度参考）。
 
-- DSW 单卡命令日志显示 `cuda:0` 和 L20，不发生 CPU fallback。
+Pattern Accuracy 是主要趋势指标，Jaccard、Dice、Overlap、Smatch 为次要指标。还应检查 parse/EOS 和长度，避免奖励提升来自格式或长度异常。
 
-## 5. P1：跑通后仍需补齐的复现性要求
+遇到以下情况应停止并保留证据，而不是直接调 test：
 
-### P1-1：生成/解码协议不明确
+- group 内 reward 长期无方差；
+- parse 或 EOS 相对 SFT 显著崩溃；
+- KL 或 completion 长度出现病态增长/塌缩；
+- 语义奖励与 condition reward 实现值不一致；
+- checkpoint 无法在新进程恢复并复现评估。
 
-- 当前测试使用 `do_sample=True, top_p=1.0, top_k=0`，但没有 generation seed，论文也未清楚披露解码协议。
-- 首轮建议保留当前 stochastic generation 语义但固定 seed；三 seed 实验分别报告。
-- 记录 `do_sample/top_k/top_p/temperature/max_length/num_return_sequences`。
-- 不要把参考 hypothesis 当作唯一正确答案；语义指标在 `G_test` 上计算，Smatch 只是参考结构指标。
+首轮 seed 42 完成后再决定是否扩展 seeds 43、44。每个 seed 必须使用独立配置、manifest、实验名和产物目录；不能看过 test 后只报告最好的 seed。
 
-### P1-2：论文误差项含义无法从代码恢复
+## 7. Phase E：导师验收报告
 
-- 当前 `stat_scores_by_pattern()` 的 `std` 是样本级分数标准差。
-- 论文表格写“平均值 ± 标准差”，但没有明确是样本级、run 级还是标准误；其数值形式也不能从当前仓库确认。
-- 我们应优先报告三个 seed 的 run-level mean ± std，同时另外保存样本级 std，避免混淆。
-
-### P1-3：训练中没有可靠 validation/最佳 checkpoint 选择
-
-- `fit()` 中 validation 和 score 保存被注释，只按固定频率保存。
-- 缩小实验应恢复 validation loss/指标，预先定义模型选择规则，例如按 validation Pattern Accuracy，Jaccard 作为 tie-breaker。
-- 不能根据 test 指标选 checkpoint。
-
-### P1-4：产物写入位置和 metadata 不规范
-
-- 训练当前会在仓库根目录写 `dataloader.pt` 和 `graph_samplers.pt`。
-- 应将数据、cache、checkpoint、日志放到 AGENTS.md 规定的持久目录，Git checkout 只保留代码和小型报告。
-- 每个 run 必须记录：Git SHA、dirty status、完整命令、配置快照、环境版本、GPU、seed、数据 hash、父 checkpoint、进程状态、开始/结束时间、输出路径。
-
-### P1-5：缺少自动测试
-
-至少应补：
-
-1. pattern/action/query 往返转换；
-2. 五类 condition encoder 与 adherence scorer；
-3. 五类 sub-logic decomposition；
-4. seeded split/sampling determinism；
-5. checkpoint save/resume；
-6. 一个 CPU 或极小 GPU batch 的 SFT/evaluation；
-7. 一个 tiny GRPO smoke（可标记为 GPU integration test）。
-
-## 6. 实施顺序（后续 agent 直接按此推进）
-
-### Phase A：建立可复现基线，不跑长任务
-
-1. 阅读根目录 `AGENTS.md`，确认 local → origin → exact SHA → DSW 流程。
-2. `git status --short --branch`，确认没有覆盖用户修改。
-3. 建议创建 `codex/reproduction-pipeline` 分支。
-4. 增加精简且可安装的环境定义；在 DSW 现有环境先验证直接依赖版本。
-5. 修复显式 GPT2 config、seed 基础设施、checkpoint 路径和阶段 epoch 语义。
-6. 修复 sampler profile、entity-number condition、unconditional evaluation。
-7. 将 sub-logic decomposition 正式接入 dataset pipeline。
-8. 修复 GRPO group/reward/reporting，并新增 `scripts/reproduce/`。
-9. 增加上述核心单元测试；此阶段不得启动 full sampling 或长训练。
-
-### Phase B：tiny 端到端 smoke（不计作论文实验）
-
-建议 profile：每 pattern train/valid/test = `8/2/2` 或 `16/2/2`，seed 42。
-
-必须完成：
-
-1. 下载并缓存 WN18RR/WordNet；
-2. 固定 8:1:1 KG split；
-3. 生成 13 类 query；
-4. 生成五类 sub-logic augmentation；
-5. 无条件 SFT 1 epoch；
-6. pattern 条件 SFT 1 epoch；
-7. 新进程恢复 checkpoint；
-8. 完整 test loop 输出五项指标和逐样本结果；
-9. tiny GRPO 至少若干 step；
-10. 恢复 GRPO checkpoint 再测试。
-
-只有以上全部成功，才能说“代码链路已跑通”。
-
-### Phase C：缩小规模 SFT-only 正式实验
-
-建议首轮：
-
-- WN18RR；
-- 每 pattern 1024/128/128；
-- seed 42；
-- 12 层模型；
-- effective batch 256；
-- 无条件 20 epoch + pattern 条件 10 epoch（先依据 smoke 吞吐量确认）；
-- 保留 best-validation 与 final checkpoint；
-- 在固定 test split 上报告五项指标。
-
-这是 Table 3 `w/o RL` 的缩小版复现，也是最低可接受正式交付。
-
-### Phase D：GRPO 正式实验
-
-- 从 Phase C 选定的 conditional checkpoint 开始；
-- group size 4；
-- batch 32；
-- reward 比例 `[1.0, 0.5, 0.5, 1.0]`；
-- 1–3 epoch 起步；
-- 同一固定 test split 评测；
-- 与 SFT-only 配对比较，主要看 Pattern Accuracy，次要看 Jaccard/Dice/Overlap/Smatch。
-
-如单 seed 趋势合理且预算允许，重复 seeds 43、44。不要在看过 test 后改 seed 或只报告最好 seed。
-
-### Phase E：导师验收报告
+Phase E 也不是已完成工作。它应在 Phase C 完成后先形成 SFT-only 版本，在 Phase D 完成后补齐最终对照。
 
 最终报告至少包含：
 
-- 论文设置、实际设置和差异原因对照表；
-- 精确 Git SHA 与环境；
-- 数据来源、split seed、样本数量和 hash；
-- 一键命令、运行耗时、GPU 使用；
-- SFT-only 与 GRPO 五项指标；
-- 论文数值与本次数值对照；
-- 趋势是否复现、未复现项及原因分析；
-- checkpoint、log、逐样本预测和 aggregate CSV 路径。
+1. 论文设置与实际设置对照：数据集、13 类 pattern、observation 上限、样本量、模型、epoch、batch、generation、GRPO、硬件；
+2. 精确 Git SHA、环境版本、CUDA/GPU 和随机种子；
+3. 数据来源、split 协议、manifest/hash、各 split 与 augmentation 数量；
+4. 可重复命令、运行起止时间、墙钟耗时、显存和产物目录；
+5. SFT-only 与 GRPO 的 Jaccard、Dice、Overlap、Pattern Accuracy、Smatch；
+6. greedy 与 sampled 结果分开，不能混为一个表；
+7. 论文 Table 3 与本次 small 结果的并排对照；
+8. GRPO 是否复现“提高 condition adherence”的趋势，以及对语义指标的影响；
+9. 单 seed 或多 seed 的统计口径、均值/标准差或置信区间；
+10. 失败、未复现项、实现假设和算力缩放局限；
+11. checkpoint、日志、逐样本预测、aggregate CSV 和配置快照的路径。
 
-## 7. 目标接口建议（尚未实现，不要直接运行）
+验收层级：
 
-后续 agent 可以把正式入口收敛到类似接口。以下是目标设计示意，不是当前可用命令：
+- **代码跑通**：tiny 数据→两阶段 SFT→checkpoint 恢复→test→tiny GRPO→恢复评估全部成功；当前已达到。
+- **最低复现**：完成 Phase C，并在固定 WN18RR test 上报告 SFT-only 五项指标；当前尚未达到。
+- **推荐复现**：完成 Phase C+D 的配对比较，最好再做 3 seeds；当前尚未达到。
+
+报告结论必须使用“缩小规模流程/趋势复现”措辞。单张 L20、small 数据、单 seed 的结果不能包装成论文绝对数值复现。
+
+## 8. 仍然开放的假设与风险
+
+以下信息论文或作者仓库没有充分披露，后续 agent 不应假装已经确定：
+
+1. 每种 pattern 的论文训练 query 精确数量和原始 seed；当前 small profile 是显式缩放设置。
+2. 除 12 层外的原始 `hug_model/config.json` 缺失；当前采用标准 GPT-2 small 宽度并随机初始化。
+3. 论文 Table 中 `±` 的精确统计口径；多 seed 时应明确 run-level std，单次 sampled 结果不能冒充多 run 方差。
+4. 论文测试 generation 的全部参数；当前同时保留 deterministic greedy 诊断和已固定参数的全分布随机采样。
+5. 当前 PyKEEN mapping 会过滤 valid/test 中未出现在 train mapping 的实体相关 triples；这与论文“unseen entities”的文字可能存在差异，必要时做敏感性分析。
+6. CUDA memory-efficient attention 不保证 bitwise deterministic；固定 seed 仍需记录库版本和硬件。
+7. 仅 train 做 sub-logic augmentation 是防止评估污染的默认决策，论文没有充分说明其他 split 的处理。
+
+若联系作者，优先询问原始 model config、query 数/seed、Table 3 checkpoint、测试 generation config 和误差项定义。新材料必须保存来源与 hash，不能无痕覆盖现有实验。
+
+## 9. DSW 部署与产物纪律
+
+遵循根目录 `AGENTS.md`：本地修改，commit/push 到 `origin`，DSW fetch 后 detached 到精确 SHA；绝不 push `upstream`，也不在本地和 DSW 维护两套手工修改。
+
+部署前：
 
 ```bash
-python -m akgr.sampling.sample_parallel \
-  --profile repro-wn-small \
-  --seed 42 \
-  --data_root /mnt/workspace/ctrlhgen-data
+# local
+cd /mnt/d/yang_nankai/CtrlHGen
+git status --short --branch
+git push origin HEAD
+git rev-parse HEAD
 
-python -m akgr.abduction_model.main \
-  --mode training \
-  --stage unconditional \
-  --experiment-config akgr/configs/reproduce/wn-pattern-small.yml
-
-python -m akgr.abduction_model.main \
-  --mode training \
-  --stage conditional \
-  --condition pattern \
-  --parent-checkpoint /mnt/workspace/ctrlhgen-checkpoints/<run>/best.pth \
-  --experiment-config akgr/configs/reproduce/wn-pattern-small.yml
-
-python -m akgr.abduction_model.main \
-  --mode optimizing \
-  --condition pattern \
-  --parent-checkpoint /mnt/workspace/ctrlhgen-checkpoints/<run>/best.pth \
-  --experiment-config akgr/configs/reproduce/wn-pattern-small.yml
-
-python -m akgr.abduction_model.main \
-  --mode testing \
-  --checkpoint /mnt/workspace/ctrlhgen-checkpoints/<run>/best.pth \
-  --experiment-config akgr/configs/reproduce/wn-pattern-small.yml
+# DSW
+ssh ctrlhgen-dsw
+cd /mnt/workspace/CtrlHGen
+git status --short --branch
+git fetch origin --prune
+git switch --detach <exact-sha>
+git rev-parse HEAD
 ```
 
-一个实验应由单一 YAML 决定模型、数据、stage epoch、optimizer、batch、generation 和 reward；shell script 只负责调用，不再复制互相矛盾的参数。
-
-## 8. 验收口径
-
-### 8.1 “代码跑通”
-
-同时满足以下条件才能判定：
-
-- 从空数据目录开始完成 tiny 数据准备；
-- 无条件和条件 SFT 都实际产生 optimizer step；
-- checkpoint 能在新进程恢复；
-- test loop 完成并生成五项指标；
-- GRPO smoke 能训练、保存、恢复和测试；
-- 命令、日志、配置、seed 和产物路径完整保存。
-
-只有 import、`--help`、采样成功、单个 loss 或手写 scorer 输出都不算完整跑通。
-
-### 8.2 “导师最低复现要求”
-
-- 已满足“代码跑通”；并且
-- 完成 Phase C，在 WN18RR pattern condition 上得到正式固定测试集指标；并且
-- 用表格对照论文 Table 3 `w/o RL`，明确缩放差异。
-
-### 8.3 “推荐的稳妥复现”
-
-- 完成 Phase C + D；
-- 在同一缩放设置下比较 SFT-only 和 GRPO；
-- Pattern Accuracy 为主指标，五项指标全部报告；
-- 最好三个 seed；
-- 清楚区分“复现实验趋势”和“复现论文绝对数值”。
-
-## 9. 当前未决信息与默认决策
-
-这些信息官方仓库/论文目前没有充分给出，后续不要假装已经知道：
-
-1. 缺失 `hug_model/config.json` 中除层数外的精确模型结构。默认建议显式采用标准 GPT-2 small 宽度、12 层、随机初始化，并在报告中列为实现假设。
-2. 论文训练 query 的精确数量和数据随机种子。默认使用本文建议的小规模 profile 和固定 seed。
-3. 论文表格 `±` 的统计口径。默认同时报告 run-level 三 seed std 与 sample-level std，明确标签。
-4. 论文测试时的精确 generation 参数。默认以当前代码的 sampling 语义为起点，补齐固定 seed 和完整配置记录。
-5. 论文是否对 train 以外 split 做 sub-logic augmentation。默认只增强 train，避免评测集污染。
-
-如能联系作者，优先询问：原始 `hug_model/config.json`、三个数据集的 sampled query 数/seed、Table 1/3 checkpoint、测试 generation config、误差项定义。得到作者材料后必须记录来源和 hash，不能覆盖现有实验而不留版本。
-
-## 10. DSW 运行与产物约定
-
-遵循 `AGENTS.md`：本地改代码，commit/push 到 `origin`，DSW fetch 后 detached 到精确 SHA；不要在本地和 DSW 维护两套手工修改，也不要 push `upstream`。
-
-推荐持久路径：
+如果 DSW checkout 是 dirty，先检查来源，不得直接丢弃。数据、checkpoint、cache 和大日志必须保存在：
 
 ```text
 /mnt/workspace/ctrlhgen-data/
 /mnt/workspace/ctrlhgen-checkpoints/
-/mnt/workspace/ctrlhgen-runs/<run-id>/
-/mnt/workspace/cache/huggingface/
-/mnt/workspace/cache/triton/
+/mnt/workspace/ctrlhgen-runs/
+/mnt/workspace/cache/
 ```
 
-建议 run ID：
+每个正式 run 至少保留：精确 SHA/status、完整命令、config snapshot、environment/GPU、manifest/hash、stdout/stderr、起止时间、进程状态、metrics、predictions 和 checkpoint 路径。不得把 generated data、checkpoint、日志或凭据提交到 Git。
 
-```text
-repro-wn-pattern-<stage>-seed<seed>-<YYYYMMDD-HHMM>
-```
+## 10. 后续 agent 的执行顺序
 
-每个 run 目录至少保存：
+后续 agent 读取 `AGENTS.md` 和本文档后，按下面顺序接手：
 
-```text
-command.sh
-git-sha.txt
-git-status.txt
-environment.txt
-gpu.txt
-config.yml
-data-manifest.json
-stdout.log
-metrics.csv
-predictions.jsonl
-checkpoints/ 或 checkpoint 路径清单
-status.json
-```
+1. 核对本地、origin、DSW 的精确 SHA 和 clean status。
+2. 核对 small manifest 的 schema、hash 和数量，不重新采样。
+3. 在部署 SHA 上运行测试/最小 preflight，确认 CUDA 和持久目录。
+4. 建立独立正式 run 记录，启动 Phase C 无条件 400 epoch。
+5. 只在 selected healthy `unconditional-best` 产生后启动 conditional 50 epoch。
+6. 只在 selected healthy `conditional-best` 产生后做固定 test 的 greedy 与 sampled 评估。
+7. 汇报 Phase C 指标和健康证据；满足第 5.6 节后再按第 6 节进行 GRPO。
+8. 完成 Phase D 配对评估，再按第 7 节形成导师验收报告。
 
-长任务启动前必须先记录 exact SHA、命令、日志目录和预期输出；启动后记录 PID/进程状态。数据、checkpoint、cache 和大日志不得提交 Git。
-
-## 11. 后续 agent 的第一步清单
-
-后续 agent 接手后无需重新做论文/仓库总盘点，直接执行：
-
-1. 阅读 `AGENTS.md` 和本文档。
-2. 检查 `git status`，确认本文档之外是否有用户新改动。
-3. 建立实现计划，先完成 Phase A；不要直接运行 README 的 full scripts。
-4. 优先修复 `hug_model`、环境、sampler schema/seed、checkpoint/stage epoch 这四个最前置阻断项。
-5. 每修一个 P0 都增加对应自动测试。
-6. Phase A 完成并 commit/push/deploy exact SHA 后，才在 DSW 创建持久目录并做 Phase B tiny smoke。
-7. 在 tiny 全链路成功前，不启动 1024/128/128 sampling 或正式 GPU 训练。
-8. 正式实验前向用户汇报预计样本数、epoch、显存和时间，再启动长任务。
-
-本文档是执行基线。若实现过程中发现新缺口，应在对应 P0/P1 条目下补充“发现、决策、验证证据”，保持后续交接连续。
+当前最重要的边界是：**Phase C 已准备好但尚未运行；Phase D/E 仍是必须保留的后续工作，而不是已完成或可跳过的内容。**
