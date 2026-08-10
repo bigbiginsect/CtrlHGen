@@ -6,7 +6,7 @@
 >
 > 运行原则：本地修改、提交并推送到 `origin`；DSW 只部署并运行精确 commit SHA。
 
-本文是后续 agent 的当前路线入口。2026-08-09 和 2026-08-10 两次 Phase C 的配置、
+本文是后续 agent 的当前路线入口。2026-08-09 和 2026-08-10 三次 Phase C 的配置、
 曲线、指标、原始证据路径和 SHA256 单独保存在
 `worklogs/phase-c-2026-08-10.md`。该记录是历史证据，不应被改写成第三次实验的预设结论。
 
@@ -18,9 +18,9 @@
 | Phase B：tiny 与监督契约诊断 | 已完成 | tokenizer padding、conditional label mask 和 checkpoint 契约问题已修复 |
 | Phase C-I | 已失败并归档 | 训练预算不足和 conditional 标签错误同时存在，checkpoint 禁止复用 |
 | Phase C-II | 已完成但指标不理想 | 12 层 paper-aligned small SFT 可生成有效结构，但远低于论文绝对数值 |
-| Phase C-III：author-aligned small | 代码与配置已实现，待 pilot/正式运行 | 当前唯一推荐 Phase C 路线 |
-| Phase D：GRPO | 阻塞 | 必须等待 Phase C-III 完成和审计，禁止从旧 v2 checkpoint 启动正式 GRPO |
-| Phase E：验收报告 | 部分完成 | 已有两次 Phase C 证据，尚缺 v3、GRPO 和最终报告 |
+| Phase C-III：author-aligned small | 已完成并审计 | 10+10 pilot 全门槛通过；正式 50+50 和固定 test 完整结束 |
+| Phase D：GRPO | 待决策 | 若进入，必须从同一个 v3 `conditional-best` 启动，禁止使用 v2 |
+| Phase E：验收报告 | 部分完成 | 已有三次 Phase C 证据，尚缺 Phase D 决策/结果和最终报告 |
 
 第一次失败 run 的任何 checkpoint 均不得使用：
 
@@ -308,11 +308,12 @@ greedy 和 sampled 必须分开命名、保留和报告。训练与 best 选择�
 
 ## 9. Phase D 与最终报告
 
-Phase D 当前明确阻塞。Phase C-III 完成后先审计：
+Phase C-III 完成后的审计结果为：
 
-- author-aligned 配置是否改善 v2 的 Pattern Accuracy 与集合重合；
-- 改善是否伴随 parse/EOS 或长度退化；
-- 是否值得从同一个 v3 `conditional-best` 进入 GRPO。
+- v3 greedy 相对 v2 的 Pattern Accuracy 提高 `0.2698`，Smatch 提高 `0.0585`；
+- Jaccard 下降 `0.0609`，Dice 和 Overlap 也下降，不能表述为全面改善；
+- parse 从 `0.9183` 变为 `0.9243`，EOS 保持 `1.0`，max-length rate 保持 `0`；
+- Phase D 是否值得执行仍需根据“condition adherence 改善但集合重合下降”的取舍决定。
 
 如果进入 Phase D，GRPO 必须使用 v3 同一 selected checkpoint、base train 和 fixed test，
 并与 v3 SFT-only 配对。禁止用 v2 checkpoint 作为正式对照的 parent。
@@ -334,12 +335,13 @@ greedy/sampled 五项指标、v2/v3/论文对照、失败项与单 seed 局限�
 后续 agent 的固定顺序：
 
 1. 阅读本文和 `worklogs/phase-c-2026-08-10.md`；
-2. 核对本地、origin、DSW 精确 SHA 与 clean status；
-3. 运行测试并核对固定 manifest；
-4. 运行隔离 Pilot，逐项审计第 7.3 节；
-5. Pilot 通过后从随机初始化启动正式 50+50 epoch；
-6. 只用 selected healthy checkpoint 做 fixed test；
-7. 更新 Phase C 实验记录，再决定是否解锁 Phase D。
+2. 用 `worklogs/phase-c-2026-08-10.md` 第 4.1 和第 6 节的路径/hash 核验 v3 原始证据；
+   DSW 当前已停止，不要为只读文档工作重启实例；
+3. 决定 Phase D 的目标和成功口径；若不进入，直接整理最终报告；
+4. 若明确授权 Phase D，重启 DSW 后核对 checkout、manifest 和 v3 `conditional-best`，
+   并以它作为唯一正式 parent；
+5. Phase D 完成后与 v3 SFT-only 配对比较，再形成最终报告。
 
-当前边界是：**两次历史 Phase C 已归档；第三次 author-aligned small 的代码和配置已准备
-就绪，但仍必须先通过 Pilot。任何 Phase D 或论文绝对数值结论都尚未获得授权或证据。**
+当前边界是：**三次 Phase C 均已归档；第三次 author-aligned small 已通过 Pilot、正式
+50+50、固定 test 和完整审计。Phase D 尚未执行或获得本轮授权，论文绝对数值复现结论
+仍不成立。**
