@@ -18,6 +18,12 @@ AUTHOR_CONFIG_PATH = CONFIG_DIR / "wn-pattern-small-author-aligned.yml"
 AUTHOR_PILOT_PATH = (
     REPO_ROOT / "akgr" / "configs" / "diagnostics" / "wn-pattern-small-author-pilot.yml"
 )
+FULL_TRAIN_AUTHOR_CONFIG_PATH = (
+    CONFIG_DIR / "wn-pattern-full-train-author-aligned.yml"
+)
+FULL_TRAIN_AUTHOR_PILOT_PATH = (
+    REPO_ROOT / "akgr" / "configs" / "diagnostics" / "wn-pattern-full-train-author-pilot.yml"
+)
 RUNTIME_ENV = {
     "CTRLHGEN_DATA_ROOT": "/tmp/ctrlhgen-test/data",
     "CTRLHGEN_CHECKPOINT_ROOT": "/tmp/ctrlhgen-test/checkpoints",
@@ -45,6 +51,7 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
         "wn-pattern-small.yml",
         "wn-pattern-full.yml",
         "wn-pattern-small-author-aligned.yml",
+        "wn-pattern-full-train-author-aligned.yml",
     }
     config = load_experiment_config(CONFIG_PATHS[profile], env=RUNTIME_ENV)
 
@@ -190,6 +197,45 @@ def test_author_aligned_formal_and_pilot_reuse_small_data_with_isolated_runs() -
         "batch_size": 16,
         "min_parse_ok": 0.1,
         "min_eos_rate": 0.9,
+    }
+
+
+def test_phase_c_iv_changes_only_train_scale_and_run_budget_from_v3() -> None:
+    v3 = load_experiment_config(AUTHOR_CONFIG_PATH, env=RUNTIME_ENV)
+    formal = load_experiment_config(FULL_TRAIN_AUTHOR_CONFIG_PATH, env=RUNTIME_ENV)
+    pilot = load_experiment_config(FULL_TRAIN_AUTHOR_PILOT_PATH, env=RUNTIME_ENV)
+
+    assert formal.experiment["name"] == "repro-wn-pattern-full-train-author-aligned-c4"
+    assert pilot.experiment["name"] == "diagnostic-wn-pattern-full-train-author-pilot-c4"
+    assert formal.data_hash == pilot.data_hash != v3.data_hash
+    assert formal.kg_hash == pilot.kg_hash == v3.kg_hash
+    for config in (formal, pilot):
+        assert config.raw["sampling"] == {
+            "train_per_pattern": 8000,
+            "valid_per_pattern": 128,
+            "test_per_pattern": 128,
+        }
+        assert config.raw["model"] == v3.raw["model"]
+        assert config.raw["augmentation"] == v3.raw["augmentation"]
+        assert config.raw["generation"] == v3.raw["generation"]
+        assert config.raw["training"]["gradient_accumulation_steps"] == 1
+        for stage in ("unconditional", "conditional"):
+            current = dict(config.raw["training"][stage])
+            reference = dict(v3.raw["training"][stage])
+            current.pop("epochs")
+            reference.pop("epochs")
+            assert current == reference
+    assert formal.raw["training"]["unconditional"]["epochs"] == 50
+    assert formal.raw["training"]["conditional"]["epochs"] == 50
+    assert formal.raw["training"]["validation"] == v3.raw["training"]["validation"]
+    assert formal.raw["training"]["checkpoint"] == v3.raw["training"]["checkpoint"]
+    assert pilot.raw["training"]["unconditional"]["epochs"] == 8
+    assert pilot.raw["training"]["conditional"]["epochs"] == 8
+    assert pilot.raw["training"]["validation"] == {
+        "every_epochs": 2,
+        "batch_size": 16,
+        "min_parse_ok": 0.9,
+        "min_eos_rate": 0.98,
     }
 
 
