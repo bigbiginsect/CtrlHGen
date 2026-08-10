@@ -324,10 +324,13 @@ def audit_training(config: ExperimentConfig, *, pilot: bool) -> dict[str, Any]:
         if validation.get("health_pass") is not True:
             raise ValueError(f"{stage} selected checkpoint is unhealthy")
         validations = [row["validation"] for row in history if row.get("validation") is not None]
-        for record in validations:
-            record["paper_average"] = _paper_average(record)
         if stage == "conditional":
+            for record in validations:
+                record["paper_average"] = _paper_average(record)
             conditional_validations = validations
+        selected_validation = dict(validation)
+        if stage == "conditional":
+            selected_validation["paper_average"] = _paper_average(validation)
         stages[stage] = {
             "epochs": expected_epochs,
             "optimizer_steps_per_epoch": expected_steps[stage],
@@ -335,9 +338,9 @@ def audit_training(config: ExperimentConfig, *, pilot: bool) -> dict[str, Any]:
             "loss_final_epoch": float(history[-1]["train_loss"]),
             "loss_decrease_rate": loss_decrease,
             "selected_checkpoint": str(selected),
-            "selected_validation": {**validation, "paper_average": _paper_average(validation)},
+            "selected_validation": selected_validation,
             "validation_trajectory": validations,
-            "pareto_epochs": _pareto_frontier(validations),
+            "pareto_epochs": _pareto_frontier(validations) if stage == "conditional" else [],
         }
     selected = stages["conditional"]["selected_validation"]
     pilot_decision = None
