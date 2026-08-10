@@ -284,13 +284,21 @@ def run_sft(config, args) -> Path:
     device = _require_cuda("SFT")
     model.to(device)
     graph_samplers = _graph_samplers(config)
+    schedule_options = (
+        {"warmup_epochs": stage_config["warmup_epochs"]}
+        if "warmup_epochs" in stage_config
+        else {
+            "optimizer_config": stage_config["optimizer"],
+            "scheduler_config": stage_config["scheduler"],
+        }
+    )
     schedule = create_sft_optimizer_schedule(
         model,
         learning_rate=stage_config["learning_rate"],
         num_batches=len(dataloader),
         gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
         epochs=stage_config["epochs"],
-        warmup_epochs=stage_config["warmup_epochs"],
+        **schedule_options,
     )
     start_epoch = 0
     inherited_global_step = 0
@@ -338,6 +346,7 @@ def run_sft(config, args) -> Path:
         parent_reference = loaded.metadata.get("parent_checkpoint")
     output = None
     for stage_epoch in range(start_epoch + 1, final_epoch + 1):
+        learning_rate_start = float(schedule.optimizer.param_groups[0]["lr"])
         epoch_loader = _loader(
             dataset_dict["train"],
             stage_config["micro_batch_size"],
@@ -352,12 +361,21 @@ def run_sft(config, args) -> Path:
             scheduler=schedule.scheduler,
             gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
         )
+        if steps != schedule.optimizer_steps_per_epoch:
+            raise RuntimeError(
+                f"{args.stage} epoch {stage_epoch} produced {steps} optimizer steps; "
+                f"expected {schedule.optimizer_steps_per_epoch}"
+            )
         global_step += steps
         history_record = {
             "stage": args.stage,
             "stage_epoch": stage_epoch,
             "global_step": global_step,
             "train_loss": train_loss,
+            "optimizer_steps": steps,
+            "learning_rate_start": learning_rate_start,
+            "learning_rate_end": float(schedule.optimizer.param_groups[0]["lr"]),
+            "optimizer_schedule": schedule.metadata,
             "validation": None,
             "checkpoint": None,
             "is_best": False,

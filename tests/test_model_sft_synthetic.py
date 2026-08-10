@@ -46,6 +46,25 @@ def _schedule(model):
     )
 
 
+def _author_schedule(model):
+    return create_sft_optimizer_schedule(
+        model, learning_rate=1e-3, num_batches=2,
+        gradient_accumulation_steps=1, epochs=2,
+        optimizer_config={
+            "name": "adam",
+            "betas": [0.9, 0.999],
+            "eps": 1e-8,
+            "weight_decay": 0.0,
+        },
+        scheduler_config={
+            "name": "linear_warmup_constant",
+            "warmup_unit": "optimizer_step",
+            "warmup_value": 2,
+            "start_factor": 0.1,
+        },
+    )
+
+
 @pytest.mark.synthetic
 def test_sft_train_epoch_updates_parameters():
     torch.manual_seed(7)
@@ -120,7 +139,8 @@ def test_tiny_model_can_learn_both_prompt_contracts_and_emit_eos():
 
 
 @pytest.mark.synthetic
-def test_two_epochs_equal_checkpoint_resume(tmp_path):
+@pytest.mark.parametrize("schedule_factory", [_schedule, _author_schedule], ids=["legacy", "author"])
+def test_two_epochs_equal_checkpoint_resume(tmp_path, schedule_factory):
     torch.manual_seed(11)
     tokenizer = create_reproduction_tokenizer(4, 2)
     seed_model = _model(tokenizer)
@@ -128,7 +148,7 @@ def test_two_epochs_equal_checkpoint_resume(tmp_path):
 
     continuous = _model(tokenizer)
     continuous.load_state_dict(initial_state)
-    continuous_schedule = _schedule(continuous)
+    continuous_schedule = schedule_factory(continuous)
     for _ in range(2):
         sft_train_epoch(
             model=continuous, dataloader=_batches(), prepare=_prepare,
@@ -138,7 +158,7 @@ def test_two_epochs_equal_checkpoint_resume(tmp_path):
 
     interrupted = _model(tokenizer)
     interrupted.load_state_dict(initial_state)
-    interrupted_schedule = _schedule(interrupted)
+    interrupted_schedule = schedule_factory(interrupted)
     sft_train_epoch(
         model=interrupted, dataloader=_batches(), prepare=_prepare,
         optimizer=interrupted_schedule.optimizer, scheduler=interrupted_schedule.scheduler,
@@ -154,7 +174,7 @@ def test_two_epochs_equal_checkpoint_resume(tmp_path):
     )
 
     resumed = _model(tokenizer)
-    resumed_schedule = _schedule(resumed)
+    resumed_schedule = schedule_factory(resumed)
     load_reproduction_checkpoint(
         checkpoint, mode="resume", model=resumed,
         optimizer=resumed_schedule.optimizer, scheduler=resumed_schedule.scheduler,

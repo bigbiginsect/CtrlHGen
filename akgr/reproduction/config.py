@@ -79,14 +79,17 @@ SECTION_KEYS = {
     },
 }
 
-STAGE_KEYS = {
+STAGE_COMMON_KEYS = {
     "epochs",
-    "warmup_epochs",
     "learning_rate",
     "micro_batch_size",
     "effective_batch_size",
     "data_variant",
 }
+STAGE_LEGACY_KEYS = STAGE_COMMON_KEYS | {"warmup_epochs"}
+STAGE_EXPLICIT_KEYS = STAGE_COMMON_KEYS | {"optimizer", "scheduler"}
+OPTIMIZER_KEYS = {"name", "betas", "eps", "weight_decay"}
+SCHEDULER_KEYS = {"name", "warmup_unit", "warmup_value", "start_factor"}
 VALIDATION_KEYS = {"every_epochs", "batch_size", "min_parse_ok", "min_eos_rate"}
 CHECKPOINT_KEYS = {"every_epochs", "keep_last"}
 REWARD_KEYS = {"jaccard", "dice", "overlap", "condition"}
@@ -99,6 +102,31 @@ def _require_exact_keys(section: str, value: Mapping[str, Any], allowed: set[str
         raise ValueError(f"Unknown keys in {section}: {sorted(unknown)}")
     if missing:
         raise ValueError(f"Missing keys in {section}: {sorted(missing)}")
+
+
+def _validate_stage_shape(stage: str, value: Mapping[str, Any]) -> str:
+    """Validate one legacy or explicit SFT stage and return its config style."""
+    section = f"training.{stage}"
+    keys = set(value)
+    explicit_fields = {"optimizer", "scheduler"}
+    if "warmup_epochs" in keys and keys & explicit_fields:
+        raise ValueError(
+            f"{section} must use either legacy warmup_epochs or explicit "
+            "optimizer/scheduler, not both"
+        )
+    if keys & explicit_fields:
+        _require_exact_keys(section, value, STAGE_EXPLICIT_KEYS)
+        optimizer = value["optimizer"]
+        scheduler = value["scheduler"]
+        if not isinstance(optimizer, dict):
+            raise ValueError(f"{section}.optimizer must be a mapping")
+        if not isinstance(scheduler, dict):
+            raise ValueError(f"{section}.scheduler must be a mapping")
+        _require_exact_keys(f"{section}.optimizer", optimizer, OPTIMIZER_KEYS)
+        _require_exact_keys(f"{section}.scheduler", scheduler, SCHEDULER_KEYS)
+        return "explicit"
+    _require_exact_keys(section, value, STAGE_LEGACY_KEYS)
+    return "legacy"
 
 
 def _canonical_hash(value: Mapping[str, Any]) -> str:
@@ -202,8 +230,10 @@ def _validate(raw: dict[str, Any]) -> None:
         if not isinstance(value, dict):
             raise ValueError(f"{section} must be a mapping")
         _require_exact_keys(section, value, allowed)
-    for stage in ("unconditional", "conditional"):
-        _require_exact_keys(f"training.{stage}", raw["training"][stage], STAGE_KEYS)
+    stage_styles = {
+        stage: _validate_stage_shape(stage, raw["training"][stage])
+        for stage in ("unconditional", "conditional")
+    }
     _require_exact_keys("training.validation", raw["training"]["validation"], VALIDATION_KEYS)
     _require_exact_keys("training.checkpoint", raw["training"]["checkpoint"], CHECKPOINT_KEYS)
     _require_exact_keys("grpo.reward_weights", raw["grpo"]["reward_weights"], REWARD_KEYS)
@@ -238,12 +268,14 @@ def _validate(raw: dict[str, Any]) -> None:
     model = raw["model"]
     if model["type"] != "gpt2" or model["initialization"] != "random":
         raise ValueError("Phase A uses a randomly initialized GPT-2 model")
-    if (model["n_layer"], model["n_embd"], model["n_head"]) != (12, 768, 12):
-        raise ValueError("Reproduction model must use the explicit GPT-2 small 12x768x12 structure")
-    if model["n_positions"] != model["n_ctx"]:
-        raise ValueError("model.n_positions and model.n_ctx must match")
-    if not isinstance(model["tie_word_embeddings"], bool):
-        raise ValueError("model.tie_word_embeddings must be a boolean")
+    if int(model["n_layer"]) not in {6, 12}:
+        raise ValueError("Reproduction model n_layer must be one of the registered 6 or 12 layer variants")
+    if (int(model["n_embd"]), int(model["n_head"])) != (768, 12):
+        raise ValueError("Reproduction model must use the registered 768-hidden, 12-head GPT-2 structure")
+    if int(model["n_positions"]) != 1024 or int(model["n_ctx"]) != 1024:
+        raise ValueError("Reproduction model n_positions and n_ctx must both be 1024")
+    if model["tie_word_embeddings"] is not True:
+        raise ValueError("Reproduction model must use tied word embeddings")
 
     accumulation = int(raw["training"]["gradient_accumulation_steps"])
     if accumulation <= 0:
@@ -252,8 +284,45 @@ def _validate(raw: dict[str, Any]) -> None:
         stage_config = raw["training"][stage]
         if int(stage_config["epochs"]) <= 0 or int(stage_config["micro_batch_size"]) <= 0:
             raise ValueError(f"training.{stage} epochs and micro_batch_size must be positive")
-        if not 0 <= int(stage_config["warmup_epochs"]) <= int(stage_config["epochs"]):
-            raise ValueError(f"training.{stage}.warmup_epochs must be between zero and epochs")
+        if float(stage_config["learning_rate"]) <= 0:
+            raise ValueError(f"training.{stage}.learning_rate must be positive")
+        if stage_styles[stage] == "legacy":
+            if not 0 <= int(stage_config["warmup_epochs"]) <= int(stage_config["epochs"]):
+                raise ValueError(f"training.{stage}.warmup_epochs must be between zero and epochs")
+        else:
+            optimizer = stage_config["optimizer"]
+            scheduler = stage_config["scheduler"]
+            if optimizer["name"] not in {"adam", "adamw"}:
+                raise ValueError(f"training.{stage}.optimizer.name must be adam or adamw")
+            betas = optimizer["betas"]
+            if (
+                not isinstance(betas, list)
+                or len(betas) != 2
+                or any(not 0.0 <= float(beta) < 1.0 for beta in betas)
+            ):
+                raise ValueError(f"training.{stage}.optimizer.betas must contain two values in [0, 1)")
+            if float(optimizer["eps"]) <= 0 or float(optimizer["weight_decay"]) < 0:
+                raise ValueError(
+                    f"training.{stage}.optimizer eps must be positive and weight_decay non-negative"
+                )
+            if scheduler["name"] not in {"linear_warmup_decay", "linear_warmup_constant"}:
+                raise ValueError(
+                    f"training.{stage}.scheduler.name must be linear_warmup_decay "
+                    "or linear_warmup_constant"
+                )
+            if scheduler["warmup_unit"] not in {"epoch", "optimizer_step"}:
+                raise ValueError(
+                    f"training.{stage}.scheduler.warmup_unit must be epoch or optimizer_step"
+                )
+            warmup_value = scheduler["warmup_value"]
+            if isinstance(warmup_value, bool) or not isinstance(warmup_value, int) or warmup_value < 0:
+                raise ValueError(f"training.{stage}.scheduler.warmup_value must be a non-negative integer")
+            if scheduler["warmup_unit"] == "epoch" and warmup_value > int(stage_config["epochs"]):
+                raise ValueError(
+                    f"training.{stage}.scheduler warm-up cannot exceed configured epochs"
+                )
+            if not 0.0 <= float(scheduler["start_factor"]) <= 1.0:
+                raise ValueError(f"training.{stage}.scheduler.start_factor must be between zero and one")
         if stage_config["data_variant"] not in {"base", "merged"}:
             raise ValueError(f"training.{stage}.data_variant must be base or merged")
         expected_effective = int(stage_config["micro_batch_size"]) * accumulation

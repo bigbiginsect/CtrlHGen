@@ -110,38 +110,40 @@ Checkpoint paths are intentionally explicit.  Conditional SFT and GRPO accept
 only the selected checkpoint that passed the configured parse/EOS health gate;
 evaluation can load any compatible checkpoint.  The
 tiny profile is a smoke test, not a paper-result reproduction.  Only after it
-passes should `wn-pattern-small.yml` be considered for a scaled experiment.
+passes should the current Phase C plan in `worklogs/requirement-gap.md` be used.
 The `full` profile reflects an author-code scale clue and must not be presented
 as a fully disclosed paper setting.
 
 ## Phase C/D checkpoint and validation policy
 
-The `small` profile keeps the paper SFT schedule (400 unconditional epochs with
-50 warm-up epochs, then 50 conditional epochs with 5 warm-up epochs) while
-scaling the per-pattern data to 1024/128/128.  It validates every ten stage
-epochs with deterministic
-greedy decoding.  It writes every validation prediction and aggregate metric
-under `$CTRLHGEN_RUN_ROOT/repro-wn-pattern-small-v2/validation/`, plus an
-append-only stage history JSONL.  A candidate must first reach 90% parseability
-and 98% EOS emission.  Unconditional selection then prioritizes parseability,
-Jaccard, and validation loss; conditional selection prioritizes Pattern
-Accuracy, parseability, Jaccard, and validation loss.  Selection never reads
-the test split.
+`wn-pattern-small.yml` is the archived paper-aligned configuration used for the
+second Phase C run.  Its contents and semantic hash remain unchanged so its
+checkpoints can still be audited, but it is no longer the recommended next run.
 
-On the DSW L20, a worst-case sampled conditional batch of shape `256 x 52`
-used 19.75 GiB peak allocated memory and 0.62 seconds for one forward/backward
-optimizer step.  The small/full configs therefore use a direct micro-batch of
-256 with no gradient accumulation, matching the paper effective batch while
-avoiding thousands of under-filled GPU launches per epoch.
+The current Phase C experiment uses
+`akgr/configs/reproduce/wn-pattern-small-author-aligned.yml`: a true six-layer
+GPT-2 with hidden size 768, 12 heads, Adam at `5e-5`, micro/effective batch 160,
+and a five-optimizer-step warm-up from 0.1x to 1.0x followed by constant LR.
+Both unconditional and conditional SFT run for 50 epochs.  It reuses the same
+1024/128/128-per-pattern small manifest, but writes to the independent
+`repro-wn-pattern-small-author-aligned-v3` experiment directory.
 
-Small-profile SFT makes a periodic checkpoint every 25 stage epochs and also saves a newly
-selected best checkpoint.  Pruning retains the two newest checkpoints and the
-current best; the configured final epoch is always saved.  The selected model
-is exposed as `unconditional-best.json`/`conditional-best.json` and a matching
-directory symlink in the experiment checkpoint root.  Phase D GRPO saves every
-100 optimizer steps and retains the latest two resumable Trainer checkpoints.
-The `tiny` and `full` profiles use the same policy with cadence values scaled
-for smoke testing and longer training, respectively.
+Before that formal run, execute the isolated 10+10 epoch configuration
+`akgr/configs/diagnostics/wn-pattern-small-author-pilot.yml`.  Pilot checkpoints
+must never initialize the formal run, and neither training nor selection may
+read the test split.  Exact gates, commands, prior-run baselines, and provenance
+of the author-code interpretation are maintained in
+`worklogs/requirement-gap.md`.  Phase D GRPO remains blocked until this third
+Phase C run is complete and audited.
+
+The configuration loader retains the legacy `warmup_epochs` contract and also
+accepts an explicit optimizer/scheduler contract.  The two forms cannot be
+mixed.  SFT histories record optimizer steps, start/end learning rates, and the
+resolved schedule so author-aligned dynamics can be checked from artifacts.
+Selected best checkpoints still require the configured parse/EOS health gates;
+unconditional selection prioritizes parseability, Jaccard, and validation loss,
+while conditional selection prioritizes Pattern Accuracy, parseability,
+Jaccard, and validation loss.
 
 Conditional prompts have the fixed token contract
 `answers COND condition SEP target END`; `SEP` is never reused as the condition

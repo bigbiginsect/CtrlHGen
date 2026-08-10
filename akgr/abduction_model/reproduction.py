@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from typing import Callable
+from typing import Callable, Mapping
 
 import torch
 from transformers import get_linear_schedule_with_warmup
@@ -44,6 +44,7 @@ class OptimizerSchedule:
     optimizer_steps_per_epoch: int
     warmup_steps: int
     total_steps: int
+    metadata: dict[str, object]
 
 
 def epoch_due(stage_epoch: int, final_epoch: int, every_epochs: int) -> bool:
@@ -154,21 +155,105 @@ def create_sft_optimizer_schedule(
     num_batches: int,
     gradient_accumulation_steps: int,
     epochs: int,
-    warmup_epochs: int,
+    warmup_epochs: int | None = None,
+    optimizer_config: Mapping[str, object] | None = None,
+    scheduler_config: Mapping[str, object] | None = None,
 ) -> OptimizerSchedule:
-    """Create AdamW and translate epoch warm-up into optimizer-step units."""
+    """Create a legacy or explicit optimizer schedule in optimizer-step units."""
     if num_batches <= 0 or gradient_accumulation_steps <= 0 or epochs <= 0:
         raise ValueError("num_batches, gradient_accumulation_steps, and epochs must be positive")
     optimizer_steps_per_epoch = math.ceil(num_batches / gradient_accumulation_steps)
     total_steps = optimizer_steps_per_epoch * epochs
-    warmup_steps = min(optimizer_steps_per_epoch * warmup_epochs, total_steps)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(learning_rate))
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps,
+    explicit = optimizer_config is not None or scheduler_config is not None
+    if explicit and (optimizer_config is None or scheduler_config is None):
+        raise ValueError("Explicit SFT schedules require both optimizer_config and scheduler_config")
+    if explicit and warmup_epochs is not None:
+        raise ValueError("Explicit SFT schedules cannot also set warmup_epochs")
+    if not explicit and warmup_epochs is None:
+        raise ValueError("Legacy SFT schedules require warmup_epochs")
+
+    if not explicit:
+        warmup_steps = optimizer_steps_per_epoch * int(warmup_epochs)
+        if not 0 <= warmup_steps <= total_steps:
+            raise ValueError("Legacy SFT warm-up cannot exceed total optimizer steps")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=float(learning_rate))
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
+        metadata = {
+            "style": "legacy",
+            "optimizer": "adamw",
+            "scheduler": "linear_warmup_decay",
+            "warmup_unit": "epoch",
+            "warmup_value": int(warmup_epochs),
+            "warmup_steps": warmup_steps,
+            "start_factor": 0.0,
+            "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
+            "total_steps": total_steps,
+        }
+        return OptimizerSchedule(
+            optimizer, scheduler, optimizer_steps_per_epoch, warmup_steps, total_steps, metadata
+        )
+
+    optimizer_name = str(optimizer_config["name"])
+    if optimizer_name not in {"adam", "adamw"}:
+        raise ValueError("Explicit SFT optimizer name must be adam or adamw")
+    optimizer_class = torch.optim.Adam if optimizer_name == "adam" else torch.optim.AdamW
+    optimizer = optimizer_class(
+        model.parameters(),
+        lr=float(learning_rate),
+        betas=tuple(float(beta) for beta in optimizer_config["betas"]),
+        eps=float(optimizer_config["eps"]),
+        weight_decay=float(optimizer_config["weight_decay"]),
     )
-    return OptimizerSchedule(optimizer, scheduler, optimizer_steps_per_epoch, warmup_steps, total_steps)
+    warmup_unit = str(scheduler_config["warmup_unit"])
+    if warmup_unit not in {"epoch", "optimizer_step"}:
+        raise ValueError("Explicit SFT warmup_unit must be epoch or optimizer_step")
+    warmup_value = int(scheduler_config["warmup_value"])
+    warmup_steps = (
+        optimizer_steps_per_epoch * warmup_value
+        if warmup_unit == "epoch"
+        else warmup_value
+    )
+    if not 0 <= warmup_steps <= total_steps:
+        raise ValueError("Explicit SFT warm-up cannot exceed total optimizer steps")
+    scheduler_name = str(scheduler_config["name"])
+    if scheduler_name not in {"linear_warmup_decay", "linear_warmup_constant"}:
+        raise ValueError(
+            "Explicit SFT scheduler name must be linear_warmup_decay or linear_warmup_constant"
+        )
+    start_factor = float(scheduler_config["start_factor"])
+    if not 0.0 <= start_factor <= 1.0:
+        raise ValueError("Explicit SFT scheduler start_factor must be between zero and one")
+
+    def lr_lambda(current_step: int) -> float:
+        if warmup_steps > 0 and current_step < warmup_steps:
+            progress = current_step / warmup_steps
+            return start_factor + (1.0 - start_factor) * progress
+        if scheduler_name == "linear_warmup_constant":
+            return 1.0
+        decay_steps = total_steps - warmup_steps
+        if decay_steps <= 0:
+            return 1.0
+        return max(0.0, (total_steps - current_step) / decay_steps)
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    metadata = {
+        "style": "explicit",
+        "optimizer": optimizer_name,
+        "scheduler": scheduler_name,
+        "warmup_unit": warmup_unit,
+        "warmup_value": warmup_value,
+        "warmup_steps": warmup_steps,
+        "start_factor": start_factor,
+        "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
+        "total_steps": total_steps,
+    }
+    return OptimizerSchedule(
+        optimizer, scheduler, optimizer_steps_per_epoch, warmup_steps, total_steps, metadata
+    )
 
 
 def sft_train_epoch(
@@ -194,6 +279,8 @@ def sft_train_epoch(
             attention_mask=batch.attention_mask,
             labels=batch.labels,
         )
+        if not torch.isfinite(output.loss):
+            raise FloatingPointError(f"Non-finite SFT loss at batch {batch_index}: {output.loss}")
         group_start = ((batch_index - 1) // gradient_accumulation_steps) * gradient_accumulation_steps
         group_size = min(gradient_accumulation_steps, num_batches - group_start)
         loss = output.loss / group_size

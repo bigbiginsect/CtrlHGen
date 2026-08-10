@@ -72,3 +72,22 @@ def test_full_reproduction_gpt2_config_initializes_and_forwards_offline_on_gpu()
         output = model(**encoded, labels=encoded.input_ids)
     assert output.logits.shape == (1, encoded.input_ids.shape[1], len(tokenizer))
     assert torch.isfinite(output.loss)
+
+
+@pytest.mark.synthetic
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_author_aligned_six_layer_gpt2_initializes_and_forwards_offline_on_gpu():
+    tokenizer = create_reproduction_tokenizer(nentity=8, nrelation=4)
+    model = create_reproduction_transformer(tokenizer, {
+        "n_layer": 6, "n_embd": 768, "n_head": 12,
+        "n_positions": 1024, "n_ctx": 1024,
+        "tie_word_embeddings": True,
+    }).to("cuda")
+    assert model.config.n_layer == 6
+    assert len(model.transformer.h) == 6
+    encoded = tokenizer("1 2", "-1 1", return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        output = model(**encoded, labels=encoded.input_ids)
+    assert output.logits.shape == (1, encoded.input_ids.shape[1], len(tokenizer))
+    assert torch.isfinite(output.loss)

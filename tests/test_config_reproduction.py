@@ -11,13 +11,22 @@ from akgr.reproduction.config import load_experiment_config
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = REPO_ROOT / "akgr" / "configs" / "reproduce"
 CONFIG_PATHS = {
-    path.stem.removeprefix("wn-pattern-"): path
-    for path in sorted(CONFIG_DIR.glob("wn-pattern-*.yml"))
+    profile: CONFIG_DIR / f"wn-pattern-{profile}.yml"
+    for profile in ("tiny", "small", "full")
 }
+AUTHOR_CONFIG_PATH = CONFIG_DIR / "wn-pattern-small-author-aligned.yml"
+AUTHOR_PILOT_PATH = (
+    REPO_ROOT / "akgr" / "configs" / "diagnostics" / "wn-pattern-small-author-pilot.yml"
+)
 RUNTIME_ENV = {
     "CTRLHGEN_DATA_ROOT": "/tmp/ctrlhgen-test/data",
     "CTRLHGEN_CHECKPOINT_ROOT": "/tmp/ctrlhgen-test/checkpoints",
     "CTRLHGEN_RUN_ROOT": "/tmp/ctrlhgen-test/runs",
+}
+LEGACY_SEMANTIC_HASHES = {
+    "tiny": "c1ef8ed2f0a528d70d4f5fdb84496824dcd154848ef77d557a08460bcbaf0e4f",
+    "small": "0ff4e8455ccf88e882840304ef8e031ae8e0fcb84967e6365bb1a2cf228d16d2",
+    "full": "4b90540ab21c43586df932c5b7eb58a0a70ae9c44b18b29f4e5bce2c5d2c78b7",
 }
 
 
@@ -31,6 +40,12 @@ RUNTIME_ENV = {
 )
 def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tuple[int, int, int]) -> None:
     assert set(CONFIG_PATHS) == {"tiny", "small", "full"}
+    assert {path.name for path in CONFIG_DIR.glob("wn-pattern-*.yml")} == {
+        "wn-pattern-tiny.yml",
+        "wn-pattern-small.yml",
+        "wn-pattern-full.yml",
+        "wn-pattern-small-author-aligned.yml",
+    }
     config = load_experiment_config(CONFIG_PATHS[profile], env=RUNTIME_ENV)
 
     assert config.dataset == "WN18RR"
@@ -110,6 +125,104 @@ def test_wn_pattern_profiles_have_the_locked_contract(profile: str, counts: tupl
             config.raw["training"]["conditional"]["epochs"],
             config.raw["training"]["conditional"]["warmup_epochs"],
         ) == (400, 50, 50, 5)
+
+
+@pytest.mark.parametrize("profile", ["tiny", "small", "full"])
+def test_legacy_config_semantic_hashes_are_unchanged(profile: str) -> None:
+    config = load_experiment_config(CONFIG_PATHS[profile], env=RUNTIME_ENV)
+    assert config.semantic_hash == LEGACY_SEMANTIC_HASHES[profile]
+
+
+def test_author_aligned_formal_and_pilot_reuse_small_data_with_isolated_runs() -> None:
+    legacy = load_experiment_config(CONFIG_PATHS["small"], env=RUNTIME_ENV)
+    formal = load_experiment_config(AUTHOR_CONFIG_PATH, env=RUNTIME_ENV)
+    pilot = load_experiment_config(AUTHOR_PILOT_PATH, env=RUNTIME_ENV)
+
+    assert formal.experiment["name"] == "repro-wn-pattern-small-author-aligned-v3"
+    assert pilot.experiment["name"] == "diagnostic-wn-pattern-small-author-pilot-v1"
+    assert formal.semantic_hash != pilot.semantic_hash != legacy.semantic_hash
+    assert formal.data_hash == pilot.data_hash == legacy.data_hash
+    assert formal.kg_hash == pilot.kg_hash == legacy.kg_hash
+    assert formal.artifact_dir == pilot.artifact_dir == legacy.artifact_dir
+
+    for config in (formal, pilot):
+        assert config.raw["model"] == {
+            "type": "gpt2",
+            "initialization": "random",
+            "n_layer": 6,
+            "n_embd": 768,
+            "n_head": 12,
+            "n_positions": 1024,
+            "n_ctx": 1024,
+            "tie_word_embeddings": True,
+        }
+        for stage in ("unconditional", "conditional"):
+            stage_config = config.raw["training"][stage]
+            assert "warmup_epochs" not in stage_config
+            assert stage_config["learning_rate"] == 5e-5
+            assert stage_config["micro_batch_size"] == 160
+            assert stage_config["effective_batch_size"] == 160
+            assert stage_config["optimizer"] == {
+                "name": "adam",
+                "betas": [0.9, 0.999],
+                "eps": 1e-8,
+                "weight_decay": 0.0,
+            }
+            assert stage_config["scheduler"] == {
+                "name": "linear_warmup_constant",
+                "warmup_unit": "optimizer_step",
+                "warmup_value": 5,
+                "start_factor": 0.1,
+            }
+
+    assert formal.raw["training"]["unconditional"]["epochs"] == 50
+    assert formal.raw["training"]["conditional"]["epochs"] == 50
+    assert formal.raw["training"]["validation"] == {
+        "every_epochs": 5,
+        "batch_size": 16,
+        "min_parse_ok": 0.9,
+        "min_eos_rate": 0.98,
+    }
+    assert pilot.raw["training"]["unconditional"]["epochs"] == 10
+    assert pilot.raw["training"]["conditional"]["epochs"] == 10
+    assert pilot.raw["training"]["validation"] == {
+        "every_epochs": 2,
+        "batch_size": 16,
+        "min_parse_ok": 0.1,
+        "min_eos_rate": 0.9,
+    }
+
+
+def test_explicit_sft_config_rejects_legacy_mixing_and_invalid_nested_values(tmp_path: Path) -> None:
+    raw = yaml.safe_load(AUTHOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["training"]["unconditional"]["warmup_epochs"] = 5
+    mixed_path = tmp_path / "mixed.yml"
+    mixed_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="either legacy warmup_epochs"):
+        load_experiment_config(mixed_path, env=RUNTIME_ENV)
+
+    raw = yaml.safe_load(AUTHOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["training"]["unconditional"]["optimizer"].pop("eps")
+    missing_path = tmp_path / "missing.yml"
+    missing_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing keys in training.unconditional.optimizer"):
+        load_experiment_config(missing_path, env=RUNTIME_ENV)
+
+    raw = yaml.safe_load(AUTHOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["training"]["unconditional"]["scheduler"]["warmup_unit"] = "batch"
+    invalid_path = tmp_path / "invalid-scheduler.yml"
+    invalid_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="warmup_unit"):
+        load_experiment_config(invalid_path, env=RUNTIME_ENV)
+
+
+def test_config_supports_only_registered_six_or_twelve_layer_models(tmp_path: Path) -> None:
+    raw = yaml.safe_load(AUTHOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["model"]["n_layer"] = 5
+    path = tmp_path / "invalid-model.yml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="6 or 12"):
+        load_experiment_config(path, env=RUNTIME_ENV)
 
 
 def test_real_data_overfit_diagnostic_is_isolated_from_reproduction_profiles() -> None:
