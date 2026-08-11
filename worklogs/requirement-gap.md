@@ -20,8 +20,8 @@
 | Phase C-II | 已完成但指标不理想 | 12 层 paper-aligned small SFT 可生成有效结构，但远低于论文绝对数值 |
 | Phase C-III：author-aligned small | 已完成并审计 | 10+10 pilot 全门槛通过；正式 50+50 和固定 test 完整结束 |
 | Phase C-IV：author-scale full train | 已完成并审计 | 8+8 pilot、正式 50+50 和一次 frozen test 全部通过；数据覆盖是当前主要瓶颈 |
-| Phase D：GRPO | parent 已重选并准备，尚未执行 | 只能从 C-IV `phase-d-parent -> conditional-epoch-45` 启动 |
-| Phase E：验收报告 | 部分完成 | 已有四次 Phase C 证据，尚缺 Phase D 结果和最终报告 |
+| Phase D：GRPO | 已完成并审计 | epoch 45 parent、13,000 steps 和唯一一次双解码 test 均闭环，预注册主门槛通过 |
+| Phase E：验收报告 | 部分完成 | 已有四次 Phase C 与 Phase D 证据，尚缺面向导师的最终汇总报告 |
 
 第一次失败 run 的任何 checkpoint 均不得使用：
 
@@ -359,7 +359,8 @@ greedy/sampled 五项指标、v2/v3/C-IV/论文对照、失败项与单 seed 局
 当前边界是：**四次 Phase C 均已归档；C-IV author-scale full train 已通过 pilot、正式
 50+50、epoch 50 frozen test 和完整审计，epoch 45 也已完成隔离 greedy/sampled bake-off。
 扩大数据显著改善语义集合指标并保持、强化控制能力，支持“覆盖不足是当前主要瓶颈”；
-Phase D parent 已重选为 epoch 45，但 GRPO 尚未执行，论文绝对数值复现结论仍不成立。**
+Phase D 已从 epoch 45 parent 完成 13,000-step GRPO、唯一一次双解码 frozen-test 和审计，
+两种解码均通过预注册主门槛，但单 seed 结果仍不支持论文绝对数值复现或统计显著性结论。**
 
 ## 11. Phase C-IV 决策摘要
 
@@ -493,3 +494,26 @@ greedy 和 sampled 的 Jaccard/Dice/Overlap 三项均值都高于上表 baseline
 parse≥0.98、EOS≥0.98、max-length rate=0、Pattern Accuracy≥0.90。GRPO raw reward、五项论文
 指标及逐 pattern 差异仍必须完整报告。未达到主指标也不得查看 test 后换 parent、挑中间
 checkpoint 或自动开第二轮；应如实归档为 Phase D 无明确收益。
+
+### 12.2 Phase D 实际结果
+
+正式运行使用代码 `509212f80fb2e1cb219048a418477fbd6eec7e68`，于 2026-08-11
+`11:28:42` 启动。step 3500 的 500-step KL 均值异常达到 `1703.2822`，因此按门槛保留现场
+并停止；模型、优化器和 checkpoint 均为有限且完整，step 4000 KL 已回落。诊断将其归因为
+TRL 0.16 反向 KL 指数估计的间歇有限离群，而非持续发散。没有删除 `grpo/`，随后从最新完整
+`checkpoint-4000` 显式 resume，并于 `12:40:29` 以 exit code 0 完成 global step 13000。
+
+terminal `evaluation-step-13000` 只执行了一次 greedy 和一次 sampled frozen-test。两者均有
+1,664 个唯一 record，JSONL/CSV 重算完全一致，EOS=1、max-length rate=0：
+
+| decoding | Jaccard | Dice | Overlap | Pattern Accuracy | Smatch | Parse | 三项均值 | GRPO raw | 五项均值 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| greedy | 0.61320 | 0.66158 | 0.73139 | 0.95192 | 0.82096 | 0.99519 | 0.66872 | 2.26161 | 0.75581 |
+| sampled | 0.56621 | 0.61155 | 0.67982 | 0.94832 | 0.81635 | 0.99519 | 0.61919 | 2.16022 | 0.72445 |
+
+相对本节冻结的 epoch 45 baseline，greedy/sampled 三项均值分别提高 `+0.00993/+0.01112`，
+GRPO raw reward 提高 `+0.02900/+0.02635`，五项均值提高 `+0.00859/+0.00862`；全部健康门槛
+通过。完整过程、恢复历史、命令、哈希、路径和指标保存在
+`/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/phase-d-result.json`，其 SHA256 为
+`37e3042c1dee892b47ae018e3be7dc1e43e6aa2451c131810530eea2f06139ae`。详细本地记录见
+`worklogs/phase-d-2026-08-11.md`。
