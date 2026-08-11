@@ -15,7 +15,10 @@ from akgr.abduction_model.reproduction import (
     sft_validation_loss,
     write_best_checkpoint_pointer,
 )
-from akgr.abduction_model.experiment_runner import _require_selected_healthy_checkpoint
+from akgr.abduction_model.experiment_runner import (
+    _require_phase_d_parent_checkpoint,
+    _require_selected_healthy_checkpoint,
+)
 
 
 def test_epoch_schedule_always_includes_final_epoch():
@@ -118,7 +121,7 @@ def test_stage_transition_requires_selected_checkpoint_that_passed_health_gate(t
     assert _require_selected_healthy_checkpoint(
         selected, stage="unconditional"
     ) == selected.resolve()
-    with pytest.raises(ValueError, match="requires selected checkpoint"):
+    with pytest.raises(ValueError, match="requires unconditional-best checkpoint"):
         _require_selected_healthy_checkpoint(other, stage="unconditional")
 
     pointer.write_text(json.dumps({
@@ -127,6 +130,29 @@ def test_stage_transition_requires_selected_checkpoint_that_passed_health_gate(t
     }))
     with pytest.raises(ValueError, match="did not pass"):
         _require_selected_healthy_checkpoint(selected, stage="unconditional")
+
+
+def test_phase_d_parent_pointer_overrides_original_conditional_best(tmp_path):
+    original = tmp_path / "conditional-epoch-50"
+    original.mkdir()
+    candidate = tmp_path / "conditional-epoch-45"
+    candidate.mkdir()
+    (tmp_path / "conditional-best.json").write_text(json.dumps({
+        "stage": "conditional",
+        "checkpoint": original.name,
+        "validation": {"health_pass": True},
+    }))
+
+    assert _require_phase_d_parent_checkpoint(original) == original.resolve()
+    (tmp_path / "phase-d-parent.json").write_text(json.dumps({
+        "kind": "phase_d_parent",
+        "stage": "conditional",
+        "checkpoint": candidate.name,
+        "validation": {"health_pass": True},
+    }))
+    assert _require_phase_d_parent_checkpoint(candidate) == candidate.resolve()
+    with pytest.raises(ValueError, match="phase-d-parent checkpoint"):
+        _require_phase_d_parent_checkpoint(original)
 
 
 class _LossModel:

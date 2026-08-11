@@ -109,22 +109,44 @@ def _file_sha256(path):
     return digest.hexdigest()
 
 
-def _require_selected_healthy_checkpoint(path, *, stage: str) -> Path:
-    """Require stage transitions to use the gated, selected SFT checkpoint."""
+def _require_checkpoint_pointer(path, *, stage: str, pointer_stem: str) -> Path:
+    """Require a checkpoint to match one healthy, recorded stage pointer."""
     checkpoint = Path(path).expanduser().resolve()
-    pointer = checkpoint.parent / f"{stage}-best.json"
+    pointer = checkpoint.parent / f"{pointer_stem}.json"
     if not pointer.is_file():
-        raise ValueError(f"Missing {stage} best-checkpoint record: {pointer}")
+        raise ValueError(f"Missing {stage} checkpoint record: {pointer}")
     payload = json.loads(pointer.read_text(encoding="utf-8"))
+    recorded_stage = payload.get("stage")
+    if recorded_stage is not None and recorded_stage != stage:
+        raise ValueError(
+            f"Checkpoint record {pointer} has stage {recorded_stage!r}, expected {stage!r}"
+        )
     selected = (checkpoint.parent / payload["checkpoint"]).resolve()
     if checkpoint != selected:
         raise ValueError(
-            f"{stage} stage transition requires selected checkpoint {selected}, got {checkpoint}"
+            f"{stage} stage transition requires {pointer_stem} checkpoint "
+            f"{selected}, got {checkpoint}"
         )
     validation = payload.get("validation", {})
     if validation.get("health_pass") is not True:
-        raise ValueError(f"Selected {stage} checkpoint did not pass parse/EOS health gates")
+        raise ValueError(f"Recorded {stage} checkpoint did not pass parse/EOS health gates")
     return checkpoint
+
+
+def _require_selected_healthy_checkpoint(path, *, stage: str) -> Path:
+    """Require stage transitions to use the gated, training-selected SFT checkpoint."""
+    return _require_checkpoint_pointer(path, stage=stage, pointer_stem=f"{stage}-best")
+
+
+def _require_phase_d_parent_checkpoint(path) -> Path:
+    """Prefer an audited Phase D parent decision without rewriting SFT history."""
+    checkpoint = Path(path).expanduser().resolve()
+    phase_d_pointer = checkpoint.parent / "phase-d-parent.json"
+    if phase_d_pointer.is_file():
+        return _require_checkpoint_pointer(
+            checkpoint, stage="conditional", pointer_stem="phase-d-parent"
+        )
+    return _require_selected_healthy_checkpoint(checkpoint, stage="conditional")
 
 
 def _evaluation_records(
@@ -529,7 +551,7 @@ def run_grpo(config, args) -> Path:
     parent = args.parent_checkpoint or args.checkpoint
     if not parent:
         raise ValueError("GRPO requires --parent-checkpoint with the conditional SFT checkpoint")
-    _require_selected_healthy_checkpoint(parent, stage="conditional")
+    parent = _require_phase_d_parent_checkpoint(parent)
     loaded = load_reproduction_checkpoint(
         parent,
         mode="parent",
@@ -557,6 +579,11 @@ def run_grpo(config, args) -> Path:
     dataset = dataset_dict["train"].map(add_prompt)
     graph_samplers = _graph_samplers(config)
     output = config.runtime_paths["checkpoint_root"] / config.experiment["name"] / "grpo"
+    if output.is_dir() and any(output.iterdir()) and not args.resume_checkpoint:
+        raise FileExistsError(
+            f"GRPO output is not empty; pass --resume-checkpoint explicitly or "
+            f"preserve and move the existing run before starting: {output}"
+        )
     trainer = create_grpo_trainer(
         model=loaded.model,
         tokenizer=tokenizer,

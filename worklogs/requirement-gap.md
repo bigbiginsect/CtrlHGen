@@ -20,7 +20,7 @@
 | Phase C-II | 已完成但指标不理想 | 12 层 paper-aligned small SFT 可生成有效结构，但远低于论文绝对数值 |
 | Phase C-III：author-aligned small | 已完成并审计 | 10+10 pilot 全门槛通过；正式 50+50 和固定 test 完整结束 |
 | Phase C-IV：author-scale full train | 已完成并审计 | 8+8 pilot、正式 50+50 和一次 frozen test 全部通过；数据覆盖是当前主要瓶颈 |
-| Phase D：GRPO | 建议进入但尚未执行 | 若获得新任务授权，只能从 C-IV healthy `conditional-best` 启动 |
+| Phase D：GRPO | parent 已重选并准备，尚未执行 | 只能从 C-IV `phase-d-parent -> conditional-epoch-45` 启动 |
 | Phase E：验收报告 | 部分完成 | 已有四次 Phase C 证据，尚缺 Phase D 结果和最终报告 |
 
 第一次失败 run 的任何 checkpoint 均不得使用：
@@ -85,7 +85,7 @@ Phase C-IV 已完成的目标是：
 
 | 项目 | 论文 | 作者仓库表达的意图 | 作者公开代码实际语义 | Phase C-II | Phase C-III 选择 |
 |---|---|---|---|---|---|
-| 层数 | 未完整披露本地 `hug_model` | `GPT2_6` / `num_layers: 6` | `num_layers` 不覆盖 GPT-2 `n_layer`，标准模板仍为 12 层 | 12 | 明确 `n_layer: 6` |
+| 层数 | 当前论文 v3 明确为 12 层 | `GPT2_6` / `num_layers: 6` | `num_layers` 不覆盖 GPT-2 `n_layer`，标准模板仍为 12 层 | 12 | 明确 `n_layer: 6` |
 | hidden / heads | 未完整披露 | 依赖缺失的 `./hug_model` | 注释指向标准 GPT-2 small | 768 / 12 | 768 / 12 |
 | optimizer | AdamW | 配置未写 | 代码使用 Adam | AdamW | Adam |
 | SFT LR | `1e-5` | `5e-5` | `5e-5` | `1e-5` | `5e-5` |
@@ -316,11 +316,20 @@ Phase C-III 的历史审计结果为：
 - parse 从 `0.9183` 变为 `0.9243`，EOS 保持 `1.0`，max-length rate 保持 `0`；
 - 当时 Phase D 是否值得执行仍需根据“condition adherence 改善但集合重合下降”的取舍决定。
 
-Phase C-IV 已把这一决策更新为：**值得从 C-IV conditional-best 进入 GRPO，但本任务没有
-执行 GRPO。** Phase C-IV 在只扩大训练数据的条件下同时显著提高集合重合和控制能力，
-形成比 v3 更合适的 SFT parent。若后续明确授权 Phase D，必须冻结使用
-`repro-wn-pattern-full-train-author-aligned-c4/conditional-best`，并与 C-IV SFT-only 配对；
-禁止使用 v2、v3 或 pilot checkpoint 作为正式 parent。
+Phase C-IV 已证明值得进入 GRPO；随后 2026-08-11 的隔离 checkpoint bake-off 又明确了
+正式 parent。训练时字典序规则选出的 `conditional-best -> conditional-epoch-50` 保留为原始
+审计事实，但不再作为 Phase D parent。epoch 45 在 frozen test 的 greedy 和 sampled 中均
+一致提高 Jaccard、Dice、Overlap 和五项均值，仅小幅降低 Pattern Accuracy、Smatch 和 parse，
+因此正式重新登记：
+
+```text
+repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent
+  -> conditional-epoch-45
+```
+
+Phase D 必须从该指针启动并与 C-IV epoch 45 SFT-only bake-off 配对；禁止使用 epoch 50、
+v2、v3 或 pilot checkpoint 作为正式 parent。两 checkpoint 的差异没有统计显著性声明，
+这是以缩小论文集合语义差距为目标的明确工程选择。
 
 最终导师报告至少包括配置来源差异、精确 SHA/环境、数据 hash/count、运行时间和显存、
 greedy/sampled 五项指标、v2/v3/C-IV/论文对照、失败项与单 seed 局限。
@@ -342,14 +351,15 @@ greedy/sampled 五项指标、v2/v3/C-IV/论文对照、失败项与单 seed 局
 2. 用 `worklogs/phase-c-2026-08-10.md` 第 8 节的路径/hash 核验 C-IV 原始证据；
    DSW 收尾后应为 `Stopped`，不要为只读文档工作重启实例；
 3. 若明确授权 Phase D，先冻结 GRPO 的目标、成功口径和一次 test 契约；
-4. 重启 DSW 后核对 checkout、manifest 和 C-IV `conditional-best`，并以它作为唯一正式
-   parent；
+4. 重启 DSW 后核对 checkout、manifest 和 C-IV `phase-d-parent`，确认它解析到
+   `conditional-epoch-45`，并以它作为唯一正式 parent；原 `conditional-best` 仍应解析到
+   epoch 50；
 5. Phase D 完成后与 C-IV SFT-only 配对比较，再形成最终报告。
 
 当前边界是：**四次 Phase C 均已归档；C-IV author-scale full train 已通过 pilot、正式
-50+50、一次 frozen test 和完整审计。扩大数据显著改善语义集合指标并保持、强化控制
-能力，支持“覆盖不足是当前主要瓶颈”；但仍有论文语义差距和单 seed 局限。Phase D 尚未
-执行，论文绝对数值复现结论仍不成立。**
+50+50、epoch 50 frozen test 和完整审计，epoch 45 也已完成隔离 greedy/sampled bake-off。
+扩大数据显著改善语义集合指标并保持、强化控制能力，支持“覆盖不足是当前主要瓶颈”；
+Phase D parent 已重选为 epoch 45，但 GRPO 尚未执行，论文绝对数值复现结论仍不成立。**
 
 ## 11. Phase C-IV 决策摘要
 
@@ -376,3 +386,99 @@ greedy 相对 v3 的 Jaccard/Dice/Overlap/Pattern Accuracy/Smatch 分别提高
 `-0.1181/-0.1133/-0.1221`，但 Pattern Accuracy 和 Smatch 已高
 `+0.1291/+0.0296`。这构成“覆盖不足是当前主要瓶颈”的强单变量证据，但不表示它是唯一
 瓶颈；`pin`、`inp`、union sampled 和长结构仍是后续优化重点。
+
+## 12. Phase D parent 现场
+
+训练时原始指针和 post-hoc Phase D 指针承担不同语义，二者必须同时保留：
+
+```text
+conditional-best -> conditional-epoch-50   # 原字典序训练 selection
+phase-d-parent   -> conditional-epoch-45   # 复现目标导向 bake-off selection
+```
+
+epoch 45 隔离 test 相对 epoch 50 的差值为：
+
+| decoding | Jaccard | Dice | Overlap | Pattern Accuracy | Smatch | Parse | 五项均值 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| greedy | +0.00616 | +0.00707 | +0.00669 | -0.00120 | -0.00279 | -0.00361 | +0.00318 |
+| sampled | +0.00604 | +0.00510 | +0.00344 | -0.00300 | -0.00328 | -0.00481 | +0.00166 |
+
+隔离证据路径：
+
+```text
+/mnt/workspace/ctrlhgen-runs/checkpoint-bakeoffs/c4-conditional-epoch45/
+```
+
+其中 `checkpoint-bakeoff-summary.json` SHA256 为
+`f60f5adb6fe0dc0f277888fd454d085790f879cb7691b7e6bc4fdb412800ceb7`。创建指针的固定命令为：
+
+```bash
+CONFIG=akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml
+CKPT_ROOT=/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4
+RUN_ROOT=/mnt/workspace/ctrlhgen-runs/repro-wn-pattern-full-train-author-aligned-c4
+BAKEOFF=/mnt/workspace/ctrlhgen-runs/checkpoint-bakeoffs/c4-conditional-epoch45/checkpoint-bakeoff-summary.json
+
+python -m akgr.reproduction.phase_d_parent \
+  --experiment-config "$CONFIG" \
+  --checkpoint "$CKPT_ROOT/conditional-epoch-45" \
+  --conditional-history "$RUN_ROOT/conditional-history.jsonl" \
+  --bakeoff-summary "$BAKEOFF"
+
+test "$(readlink -f "$CKPT_ROOT/phase-d-parent")" = \
+  "$CKPT_ROOT/conditional-epoch-45"
+```
+
+正式 Phase D 命令只能传 stable pointer，并应使用新的 run root，避免把 GRPO 日志混入
+Phase C-IV 的 SFT 审计目录：
+
+```bash
+PHASE_D_RUN_ROOT=/mnt/workspace/ctrlhgen-runs/phase-d-formal-<timestamp>
+mkdir -p "$PHASE_D_RUN_ROOT"
+
+CTRLHGEN_RUN_ROOT="$PHASE_D_RUN_ROOT" \
+  bash scripts/reproduce/grpo.sh "$CONFIG" "$CKPT_ROOT/phase-d-parent"
+```
+
+runner 在 `phase-d-parent.json` 存在时会拒绝 epoch 50；若其他历史实验没有该指针，仍兼容
+原来的 `conditional-best`。正式启动前还必须确认 `$CKPT_ROOT/grpo` 不存在、代码 checkout
+为本地提交并推送后的精确 SHA、manifest hash 不变，并把 Phase D 的 stdout、状态和选择
+记录写入新的 control/run 目录。
+
+### 12.1 已冻结的 Phase D 执行与验收口径
+
+本轮只执行配置中已经固定的一次 GRPO：seed 42、1 epoch、`num_generations=4`、batch 32、
+LR `1e-5`、beta `0.1`、epsilon `0.2`，reward 权重为
+`Jaccard 1 + Dice 0.5 + Overlap 0.5 + condition 1`。不根据中间 checkpoint 的 test 指标选点；
+正式比较对象只有训练完成后保存的 `grpo/evaluation-step-<global-step>`。如果中断，只允许从
+同一 output 下的 Trainer checkpoint 显式 resume，不得静默覆盖已有 `$CKPT_ROOT/grpo`。
+
+epoch 45 的固定 SFT-only baseline 为：
+
+| decoding | semantic average (J/D/O) | GRPO raw reward | 五项均值 | Parse | EOS |
+|---|---:|---:|---:|---:|---:|
+| greedy | 0.6587865748 | 2.2326088408 | 0.7472152599 | 0.9915865385 | 1.0 |
+| sampled | 0.6080735782 | 2.1338670354 | 0.7158361716 | 0.9897836538 | 1.0 |
+
+训练过程不得读取 test。GRPO 完成后只做一次 greedy 和一次 sampled frozen-test：
+
+```bash
+GRPO_CHECKPOINT="$CKPT_ROOT/grpo/evaluation-step-<global-step>"
+
+CTRLHGEN_RUN_ROOT="$PHASE_D_RUN_ROOT" python -m akgr.abduction_model.main \
+  --experiment-config "$CONFIG" \
+  --mode testing \
+  --checkpoint "$GRPO_CHECKPOINT" \
+  --test_split test \
+  --overwrite_batchsize 64 \
+  --greedy
+
+CTRLHGEN_RUN_ROOT="$PHASE_D_RUN_ROOT" \
+  bash scripts/reproduce/evaluate.sh "$CONFIG" "$GRPO_CHECKPOINT"
+```
+
+“运行完成”和“指标有效”分开判断。完成要求一轮训练、evaluation checkpoint、两种解码各
+1,664 个唯一 record、JSONL/CSV 重算一致以及 provenance/hash 齐全；有效性的预注册主指标是
+greedy 和 sampled 的 Jaccard/Dice/Overlap 三项均值都高于上表 baseline，同时要求
+parse≥0.98、EOS≥0.98、max-length rate=0、Pattern Accuracy≥0.90。GRPO raw reward、五项论文
+指标及逐 pattern 差异仍必须完整报告。未达到主指标也不得查看 test 后换 parent、挑中间
+checkpoint 或自动开第二轮；应如实归档为 Phase D 无明确收益。

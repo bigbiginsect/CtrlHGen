@@ -120,30 +120,34 @@ as a fully disclosed paper setting.
 second Phase C run.  Its contents and semantic hash remain unchanged so its
 checkpoints can still be audited, but it is no longer the recommended next run.
 
-The current Phase C experiment uses
-`akgr/configs/reproduce/wn-pattern-small-author-aligned.yml`: a true six-layer
-GPT-2 with hidden size 768, 12 heads, Adam at `5e-5`, micro/effective batch 160,
-and a five-optimizer-step warm-up from 0.1x to 1.0x followed by constant LR.
-Both unconditional and conditional SFT run for 50 epochs.  It reuses the same
-1024/128/128-per-pattern small manifest, but writes to the independent
-`repro-wn-pattern-small-author-aligned-v3` experiment directory.
+The third Phase C run used
+`akgr/configs/reproduce/wn-pattern-small-author-aligned.yml`; it is now an
+archived small-data experiment.  The completed author-scale Phase C-IV run uses
+`akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml`: a six-layer
+GPT-2 with hidden size 768, 12 heads, Adam at `5e-5`, 50 unconditional plus 50
+conditional epochs, and 8,000 training records per pattern.
 
-Before that formal run, execute the isolated 10+10 epoch configuration
-`akgr/configs/diagnostics/wn-pattern-small-author-pilot.yml`.  Pilot checkpoints
-must never initialize the formal run, and neither training nor selection may
-read the test split.  Exact gates, commands, prior-run baselines, and provenance
-of the author-code interpretation are maintained in
-`worklogs/requirement-gap.md`.  Phase D GRPO remains blocked until this third
-Phase C run is complete and audited.
+Phase D uses the C-IV post-hoc bake-off decision
+`repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent`, which resolves to
+`conditional-epoch-45`.  The original `conditional-best` continues to resolve
+to epoch 50 and records the training-time lexicographic selection; it must not
+be substituted for the Phase D pointer.  Exact evidence, gates, commands, and
+provenance are maintained in `worklogs/requirement-gap.md` and
+`worklogs/phase-c-2026-08-10.md`.  Pilot checkpoints must never initialize a
+formal run, and neither training nor checkpoint selection may read the test
+split; the epoch 45 change is an explicitly documented post-hoc engineering
+decision based on an isolated frozen-test bake-off.
 
 The configuration loader retains the legacy `warmup_epochs` contract and also
 accepts an explicit optimizer/scheduler contract.  The two forms cannot be
 mixed.  SFT histories record optimizer steps, start/end learning rates, and the
 resolved schedule so author-aligned dynamics can be checked from artifacts.
-Selected best checkpoints still require the configured parse/EOS health gates;
-unconditional selection prioritizes parseability, Jaccard, and validation loss,
-while conditional selection prioritizes Pattern Accuracy, parseability,
-Jaccard, and validation loss.
+Training-selected best checkpoints still require the configured parse/EOS
+health gates; unconditional selection prioritizes parseability, Jaccard, and
+validation loss, while conditional selection prioritizes Pattern Accuracy,
+parseability, Jaccard, and validation loss.  The separate `phase-d-parent`
+record is the only documented post-hoc exception and does not rewrite those
+training-selection records.
 
 Conditional prompts have the fixed token contract
 `answers COND condition SEP target END`; `SEP` is never reused as the condition
