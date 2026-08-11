@@ -216,6 +216,32 @@ def build_prompt(
     return f"{source} {delimiter} {condition.value}"
 
 
+def build_generation_prompt(
+    source: str,
+    condition: ConditionSpec | None,
+    tokenizer,
+    condition_delimiter: str | None = None,
+) -> str:
+    """Build the complete causal-generation prefix, including target ``SEP``.
+
+    Pair tokenization inserts ``SEP`` between prompt and target during SFT and
+    evaluation.  Generation APIs that tokenize a raw prompt with
+    ``add_special_tokens=False`` do not run that pair post-processor, so their
+    input must include the target-boundary token explicitly.
+    """
+    prompt = build_prompt(
+        source,
+        condition,
+        tokenizer,
+        condition_delimiter=condition_delimiter,
+    )
+    if not tokenizer.sep_token:
+        raise ValueError("A target-boundary SEP token must be configured")
+    if tokenizer.convert_tokens_to_ids(tokenizer.sep_token) == tokenizer.unk_token_id:
+        raise ValueError(f"Target-boundary token {tokenizer.sep_token!r} resolves to UNK")
+    return f"{prompt} {tokenizer.sep_token}"
+
+
 def prepare_batch(
     device,
     sample,

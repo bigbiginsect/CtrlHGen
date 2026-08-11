@@ -3,7 +3,13 @@ import pytest
 pytest.importorskip("transformers")
 pytest.importorskip("tokenizers")
 
-from akgr.tokenizer import create_reproduction_tokenizer, create_tokenizer, prepare_batch
+from akgr.reproduction.contracts import ConditionSpec
+from akgr.tokenizer import (
+    build_generation_prompt,
+    create_reproduction_tokenizer,
+    create_tokenizer,
+    prepare_batch,
+)
 
 
 SPECIAL = {
@@ -109,3 +115,15 @@ def test_training_forces_right_padding_even_if_loaded_tokenizer_was_left_padded(
     for row, target in enumerate(varied["target"]):
         active_labels = [value for value in batch.labels[row].tolist() if value != -100]
         assert tokenizer.convert_ids_to_tokens(active_labels) == target.split() + ["END"]
+
+
+def test_raw_generation_prompt_explicitly_ends_at_target_boundary(tokenizer):
+    prompt = build_generation_prompt(
+        "1 2",
+        ConditionSpec("pattern", "i p e p e"),
+        tokenizer,
+        condition_delimiter="COND",
+    )
+    assert prompt == "1 2 COND i p e p e SEP"
+    encoded = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    assert tokenizer.convert_ids_to_tokens(encoded)[-1] == "SEP"

@@ -38,7 +38,7 @@ from akgr.reproduction.config import load_experiment_config
 from akgr.reproduction.contracts import ConditionSpec
 from akgr.reproduction.seed import derive_seed, make_generator, seed_everything
 from akgr.tokenizer import (
-    build_prompt,
+    build_generation_prompt,
     condition_value_from_target,
     create_reproduction_tokenizer,
     prepare_batch,
@@ -569,7 +569,7 @@ def run_grpo(config, args) -> Path:
         value = condition_value_from_target(config.condition, example["target"])
         spec = ConditionSpec(config.condition, value)
         return {
-            "prompt": build_prompt(
+            "prompt": build_generation_prompt(
                 example["source"], spec, tokenizer,
                 condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
             ),
