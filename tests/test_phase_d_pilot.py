@@ -64,3 +64,28 @@ def test_fresh_sampler_rejects_forbidden_and_internal_query_duplicates(monkeypat
     assert audit["overlap_with_sft_or_validation"] == 0
     assert audit["internal_query_duplicates"] == 0
     assert audit["rejected_forbidden"] == 1
+    assert audit["seed_namespace"] == "phase_d_repaired_pilot"
+
+
+def test_fresh_sampler_uses_explicit_namespace(monkeypatch):
+    monkeypatch.setattr(
+        "akgr.reproduction.phase_d_pilot._patterns", lambda _: [("p(e)", "1p")]
+    )
+    observed_seeds = []
+
+    def fake_run_tasks(tasks, graph_samplers, workers):
+        observed_seeds.extend(task["task_seed"] for task in tasks)
+        return ([{
+            "record_id": "r",
+            "answers": [1],
+            "query": ["fresh"],
+            "pattern_str": "p(e)",
+        }], [])
+
+    monkeypatch.setattr("akgr.reproduction.phase_d_pilot.run_tasks", fake_run_tasks)
+    _, audit = sample_fresh_rl_records(
+        config=_config(), graph_samplers={}, count_per_pattern=1,
+        forbidden_queries=set(), workers=1, sampling_namespace="full-v1",
+    )
+    assert audit["seed_namespace"] == "full-v1"
+    assert len(observed_seeds) == 1

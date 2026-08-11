@@ -129,6 +129,8 @@ def sample_fresh_rl_records(
     count_per_pattern: int,
     forbidden_queries: set[str],
     workers: int,
+    sampling_namespace: str = "phase_d_repaired_pilot",
+    max_rounds: int = 100,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Sample an exact balanced RL-only set and reject all identity overlap."""
     patterns = _patterns("akgr/metadata/pattern_table.csv")
@@ -143,13 +145,15 @@ def sample_fresh_rl_records(
 
     while any(len(accepted[pattern]) < int(count_per_pattern) for pattern, _ in patterns):
         rounds += 1
-        if rounds > 20:
+        if rounds > int(max_rounds):
             missing = {
                 abbreviation: int(count_per_pattern) - len(accepted[pattern])
                 for pattern, abbreviation in patterns
                 if len(accepted[pattern]) < int(count_per_pattern)
             }
-            raise RuntimeError(f"Unable to fill fresh RL dataset after 20 rounds: {missing}")
+            raise RuntimeError(
+                f"Unable to fill fresh RL dataset after {max_rounds} rounds: {missing}"
+            )
         tasks = []
         for pattern, abbreviation in patterns:
             missing = int(count_per_pattern) - len(accepted[pattern])
@@ -164,7 +168,7 @@ def sample_fresh_rl_records(
                     "pattern_abbr": abbreviation,
                     "ordinal": ordinal,
                     "task_seed": derive_seed(
-                        config.seed, "phase_d_repaired_pilot", abbreviation, ordinal
+                        config.seed, sampling_namespace, abbreviation, ordinal
                     ),
                     "max_answers": int(config.raw["data"]["max_answers"]),
                     "max_attempts": int(config.raw["data"]["max_attempts_per_record"]),
@@ -198,7 +202,8 @@ def sample_fresh_rl_records(
     if any(_query_signature(record) in forbidden_queries for record in records):
         raise AssertionError("Fresh RL data overlaps a forbidden query")
     audit = {
-        "seed_namespace": "phase_d_repaired_pilot",
+        "seed_namespace": sampling_namespace,
+        "max_rounds": int(max_rounds),
         "rounds": rounds,
         "count": len(records),
         "count_per_pattern": int(count_per_pattern),
@@ -465,12 +470,30 @@ def run_pilot(args: argparse.Namespace) -> Path:
         configure_reproduction_logging(control_dir / "reproduction.log")
         graph_samplers = _graph_samplers(config)
         forbidden, exclusion_audit = _load_forbidden_queries(config)
+        extra_forbidden_counts = {}
+        for raw_path in args.extra_forbidden_jsonl:
+            path = Path(raw_path).expanduser().resolve()
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            forbidden.update(_query_signature(record) for record in rows)
+            extra_forbidden_counts[str(path)] = len(rows)
+        if extra_forbidden_counts:
+            exclusion_audit["extra_forbidden_jsonl"] = extra_forbidden_counts
+            exclusion_audit["forbidden_query_count"] = len(forbidden)
+            exclusion_audit["forbidden_query_set_sha256"] = _sha256_bytes(
+                "\n".join(sorted(forbidden)).encode("utf-8")
+            )
         records, sampling_audit = sample_fresh_rl_records(
             config=config,
             graph_samplers=graph_samplers,
             count_per_pattern=args.fresh_per_pattern,
             forbidden_queries=forbidden,
             workers=args.workers,
+            sampling_namespace=args.sampling_namespace,
+            max_rounds=args.max_sampling_rounds,
         )
         data_path = control_dir / "fresh-rl-train.jsonl"
         _write_jsonl(data_path, records)
@@ -634,9 +657,20 @@ def main() -> None:
     parser.add_argument("--signal-prompts", type=int, default=256)
     parser.add_argument("--max-steps", type=int, default=1664)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--sampling-namespace", default="phase_d_repaired_pilot")
+    parser.add_argument("--max-sampling-rounds", type=int, default=100)
+    parser.add_argument("--extra-forbidden-jsonl", action="append", default=[])
     args = parser.parse_args()
-    if args.fresh_per_pattern <= 0 or args.signal_prompts <= 0 or args.max_steps <= 0:
-        parser.error("fresh-per-pattern, signal-prompts, and max-steps must be positive")
+    if (
+        args.fresh_per_pattern <= 0
+        or args.signal_prompts <= 0
+        or args.max_steps <= 0
+        or args.max_sampling_rounds <= 0
+    ):
+        parser.error(
+            "fresh-per-pattern, signal-prompts, max-steps, and max-sampling-rounds "
+            "must be positive"
+        )
     result = run_pilot(args)
     print(result)
 
