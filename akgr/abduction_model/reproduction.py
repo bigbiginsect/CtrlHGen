@@ -395,11 +395,31 @@ def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: in
         num_train_epochs=float(grpo["epochs"]),
         max_steps=int(max_steps),
         learning_rate=float(grpo["learning_rate"]),
+        optim="adamw_torch",
+        weight_decay=0.0,
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_epsilon=1e-8,
+        max_grad_norm=1.0,
+        lr_scheduler_type="linear",
+        warmup_steps=0,
         beta=float(grpo["beta"]),
         epsilon=float(grpo["epsilon"]),
+        num_iterations=1,
+        scale_rewards=True,
         num_generations=4,
         per_device_train_batch_size=int(grpo["per_device_train_batch_size"]),
+        gradient_accumulation_steps=1,
+        max_prompt_length=512,
         max_completion_length=int(grpo["max_completion_length"]),
+        temperature=0.9,
+        top_p=1.0,
+        top_k=50,
+        repetition_penalty=1.0,
+        use_vllm=False,
+        bf16=False,
+        fp16=False,
+        gradient_checkpointing=False,
         reward_weights=[
             float(weights["jaccard"]),
             float(weights["dice"]),
@@ -428,8 +448,13 @@ def create_grpo_trainer(
 ):
     """Create a GRPOTrainer whose checkpoints support Trainer resume."""
     from trl import GRPOTrainer
+    from trl.trainer.utils import disable_dropout_in_model
 
     tokenizer.padding_side = "left"
+    # GRPO's reference model is evaluated without dropout.  Leaving dropout
+    # active only in the policy makes identical initial weights report a large,
+    # spurious KL and produces unstable gradients before the first update.
+    disable_dropout_in_model(model)
     reward_functions = make_grpo_reward_functions(
         condition=config.condition,
         graph_samplers=graph_samplers,
