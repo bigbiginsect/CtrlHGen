@@ -444,6 +444,17 @@ runner 在 `phase-d-parent.json` 存在时会拒绝 epoch 50；若其他历史�
 为本地提交并推送后的精确 SHA、manifest hash 不变，并把 Phase D 的 stdout、状态和选择
 记录写入新的 control/run 目录。
 
+2026-08-11 已在 DSW 用提交 `592c08e5bfe38e276a9c7ed2c7fa1a1ddb47bdb6` 完成发布和
+runner 正反门禁验证。`phase-d-parent.json` SHA256 为
+`b8ae1bdfe3e9161222645a38c02c9e21887189fabbfb7fdca2274145c27fd33a`；原
+`conditional-best.json` 发布前后 SHA256 均为
+`c496a447436ae79efe2e5aefb90e757dd9ac2c6f6838e40df7d7c2633ac19d6f`。正式 checkpoint
+目录的 `grpo/` 仍不存在。已预建的空 run root 为：
+
+```text
+/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45
+```
+
 ### 12.1 已冻结的 Phase D 执行与验收口径
 
 本轮只执行配置中已经固定的一次 GRPO：seed 42、1 epoch、`num_generations=4`、batch 32、
