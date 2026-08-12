@@ -1,10 +1,16 @@
 # CtrlHGen 复现现状、Phase C-IV 结论与执行交接
 
-> 状态日期：2026-08-11（Asia/Shanghai）
+> 状态日期：2026-08-12（Asia/Shanghai）
 >
 > 当前分支：`codex/reproduction-pipeline`
 >
 > 运行原则：本地修改、提交并推送到 `origin`；DSW 只部署并运行精确 commit SHA。
+
+> **最终报告入口：** `worklogs/reproduction-report-2026-08-12.md`。本交接文档第 12 节记录的
+> 是第一轮正式 Phase D；之后完成的 fresh RL-only + 末尾 `SEP` repaired Phase D 已通过唯一
+> frozen-test，并取代旧轮成为最终方法结果。详细证据见 `worklogs/phase-d-pilot-2026-08-11.md`、
+> `worklogs/phase-d-repaired-full-2026-08-11.md` 和
+> `worklogs/phase-d-repaired-frozen-test-2026-08-12.md`。
 
 本文是后续 agent 的当前路线入口。前三次 small Phase C 和第四次 full-train 数据规模消融的
 配置、曲线、指标、原始证据路径和 SHA256 单独保存在
@@ -20,8 +26,8 @@
 | Phase C-II | 已完成但指标不理想 | 12 层 paper-aligned small SFT 可生成有效结构，但远低于论文绝对数值 |
 | Phase C-III：author-aligned small | 已完成并审计 | 10+10 pilot 全门槛通过；正式 50+50 和固定 test 完整结束 |
 | Phase C-IV：author-scale full train | 已完成并审计 | 8+8 pilot、正式 50+50 和一次 frozen test 全部通过；数据覆盖是当前主要瓶颈 |
-| Phase D：GRPO | 已完成并审计 | epoch 45 parent、13,000 steps 和唯一一次双解码 test 均闭环，预注册主门槛通过 |
-| Phase E：验收报告 | 部分完成 | 已有四次 Phase C 与 Phase D 证据，尚缺面向导师的最终汇总报告 |
+| Phase D：GRPO | 已完成并审计 | repaired full 13,000 steps 与唯一双解码 frozen-test 均通过；旧正式轮保留为诊断基线 |
+| Phase E：验收报告 | 已完成 | 综合报告、DSW compact 原始记录、SHA 索引与五张可重建图表已落库 |
 
 第一次失败 run 的任何 checkpoint 均不得使用：
 

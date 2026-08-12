@@ -1,0 +1,37 @@
+{
+  "diagnosed_at": "2026-08-11T11:50:53.877692+08:00",
+  "diagnosis": "Intermittent finite reverse-KL estimator outlier, not persistent numerical divergence or artifact corruption. TRL 0.16 computes per-token KL as exp(ref_logp-policy_logp)-(ref_logp-policy_logp)-1; rare large finite log-probability gaps can dominate a 500-step mean. The subsequent aggregate recovered at step 4000, reward improved, and both model and optimizer states remained finite.",
+  "integrity": {
+    "checkpoint_3900_complete": true,
+    "checkpoint_3900_to_4000_model_l2_delta": 0.4701200961058506,
+    "checkpoint_3900_to_4000_model_max_abs_delta": 0.0005187187343835831,
+    "checkpoint_4000_complete": true,
+    "model_nonfinite_tensors": 0,
+    "optimizer_nonfinite_tensors": 0
+  },
+  "interruption": {
+    "exit_code": 143,
+    "last_observed_step": 4007,
+    "latest_complete_checkpoint": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-4000",
+    "signal": "SIGTERM"
+  },
+  "resume_decision": "Resume explicitly from the latest complete same-output Trainer checkpoint-4000 without changing config, data, reward, epoch, or parent. Continue monitoring for recurrence, NaN/Inf, sustained KL escalation, OOM, disk risk, or corruption.",
+  "schema_version": 1,
+  "trigger": {
+    "step_2500": {
+      "grad_norm": 23566.599609375,
+      "kl": 43.26862094316818,
+      "loss": 4.3285
+    },
+    "step_3500": {
+      "grad_norm": 7.627130508422852,
+      "kl": 1703.2822414229752,
+      "loss": 170.3287
+    },
+    "step_4000": {
+      "kl": 7.193066676357761,
+      "loss": 0.7204,
+      "reward": 2.7019939198493956
+    }
+  }
+}

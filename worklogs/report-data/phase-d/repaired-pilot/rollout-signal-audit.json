@@ -1,0 +1,22 @@
+{
+  "all_strings_identical_group_rate": 0.37109375,
+  "completion_count": 1024,
+  "condition_accuracy": 0.9814453125,
+  "eos_rate": 1.0,
+  "gate_pass": true,
+  "gates": {
+    "eos_rate_gte_0.98": true,
+    "mean_unique_strings_per_group_gte_1.50": true,
+    "parse_rate_gte_0.95": true,
+    "zero_reward_variance_group_rate_lte_0.70": true
+  },
+  "mean_combined_reward": 2.1942435752341543,
+  "mean_dice": 0.6121892971747701,
+  "mean_jaccard": 0.5704972504405996,
+  "mean_overlap": 0.6724127274123579,
+  "mean_unique_strings_per_group": 2.23828125,
+  "num_generations": 4,
+  "parse_rate": 0.9970703125,
+  "prompt_group_count": 256,
+  "zero_reward_variance_group_rate": 0.63671875
+}

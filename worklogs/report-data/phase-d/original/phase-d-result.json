@@ -1,0 +1,301 @@
+{
+  "artifacts": {
+    "checkpoint_12900_model": {
+      "bytes": 298003912,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-12900/model.safetensors",
+      "sha256": "da9b94c840046bc99ba6b9035e8812964fe7e82217f009f58c74317c7ed33e80"
+    },
+    "checkpoint_12900_state": {
+      "bytes": 15031,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-12900/trainer_state.json",
+      "sha256": "9fe2d71db849ce9467848f7d0ea340dbe3b730006ac2e0a13bb5db47e5700504"
+    },
+    "checkpoint_13000_model": {
+      "bytes": 298003912,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-13000/model.safetensors",
+      "sha256": "d7a4829b4d6aba6edb02f3666b1e1e36a5ef58e993dbf5a700d1558975e46a61"
+    },
+    "checkpoint_13000_state": {
+      "bytes": 15554,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-13000/trainer_state.json",
+      "sha256": "d7eebbb75ac2d99adda4ff904ccbc6b9de127a08edd5861fe19a52f6137caa23"
+    },
+    "evaluation_audit": {
+      "bytes": 17158,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/phase-d-evaluation-audit.json",
+      "sha256": "91bf5699749ee6c77112c2b8fd970b82ba15cb4c26c71f67b9d5f87f28791f8a"
+    },
+    "evaluation_metadata": {
+      "bytes": 3979,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000/metadata.json",
+      "sha256": "737569bbd482be806ce145fc1e15d628455c265a2b91180c7ad14b37cf5b75d1"
+    },
+    "evaluation_model": {
+      "bytes": 298003912,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000/model/model.safetensors",
+      "sha256": "d7a4829b4d6aba6edb02f3666b1e1e36a5ef58e993dbf5a700d1558975e46a61"
+    },
+    "final_model": {
+      "bytes": 298003912,
+      "path": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/final-model/model.safetensors",
+      "sha256": "d7a4829b4d6aba6edb02f3666b1e1e36a5ef58e993dbf5a700d1558975e46a61"
+    },
+    "greedy_csv": {
+      "bytes": 248,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/repro-wn-pattern-full-train-author-aligned-c4/test-greedy.csv",
+      "sha256": "0f456b217128b6ba7caf20d8a812d2b5efafa9341bb46336b007f8f29dba23fd"
+    },
+    "greedy_jsonl": {
+      "bytes": 785533,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/repro-wn-pattern-full-train-author-aligned-c4/test-greedy.jsonl",
+      "sha256": "028afc9d27591674bee33a5e4ef424781ae99866be53a0e96db6a9ef8405099a"
+    },
+    "interruption_diagnosis": {
+      "bytes": 1661,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/interruption-diagnosis-step4000.json",
+      "sha256": "05123b5554f434398e629e89d24e6b908c8b3b2653ffee804fddc903a1a5a9f4"
+    },
+    "reproduction_log": {
+      "bytes": 4617840,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/repro-wn-pattern-full-train-author-aligned-c4/reproduction.log",
+      "sha256": "1d280c98c362a16fc544b48d87d5070bfa4d66ea67c02bc90ffaedab4105c8b1"
+    },
+    "sampled_csv": {
+      "bytes": 248,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/repro-wn-pattern-full-train-author-aligned-c4/test-sampled.csv",
+      "sha256": "3f1a272e40063efd4e33d0269b7492eb32ed929a1022e9e4540e918824f55812"
+    },
+    "sampled_jsonl": {
+      "bytes": 783588,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/repro-wn-pattern-full-train-author-aligned-c4/test-sampled.jsonl",
+      "sha256": "525f4f79ac67efde049abc8e5b52bc47f8507ac001b2357bc25df356e59a2d3c"
+    },
+    "stdout_log": {
+      "bytes": 1010571,
+      "path": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/stdout.log",
+      "sha256": "1519aa12e1d75a44029e919463a3f1f7b923037271e3d6229df1878945a03b9f"
+    }
+  },
+  "commands": {
+    "greedy": "CTRLHGEN_RUN_ROOT=/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45 python -m akgr.abduction_model.main --experiment-config akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml --mode testing --checkpoint /mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000 --test_split test --overwrite_batchsize 64 --greedy",
+    "initial_launch": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/launch.sh",
+    "initial_training": "bash scripts/reproduce/grpo.sh akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml /mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent",
+    "resume_training": "python -m akgr.abduction_model.main --experiment-config akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml --mode optimizing --parent-checkpoint /mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent --resume-checkpoint /mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-4000",
+    "sampled": "CTRLHGEN_RUN_ROOT=/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45 bash scripts/reproduce/evaluate.sh akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml /mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000"
+  },
+  "constraints": {
+    "automatic_extra_training": false,
+    "epochs_changed": false,
+    "greedy_runs": 1,
+    "intermediate_checkpoint_tested": false,
+    "parent_changed": false,
+    "reward_changed": false,
+    "sampled_runs": 1,
+    "test_used_during_training": false
+  },
+  "evaluation": {
+    "audit_sha256": "91bf5699749ee6c77112c2b8fd970b82ba15cb4c26c71f67b9d5f87f28791f8a",
+    "audit_status": "pass",
+    "checkpoint": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000",
+    "conclusion": "Phase D meets the preregistered single-seed primary gate for both greedy and sampled decoding. This is descriptive, not a statistical significance claim.",
+    "decoding": {
+      "greedy": {
+        "all_gates_pass": true,
+        "current": {
+          "condition_accuracy": 0.9519230769230769,
+          "dice": 0.6615782593149905,
+          "eos_rate": 1.0,
+          "grpo_raw": 2.261605148797143,
+          "jaccard": 0.6131995621218493,
+          "max_length_rate": 0.0,
+          "mean_generated_tokens": 6.933293269230769,
+          "overlap": 0.731386760189443,
+          "paper_average": 0.7558098552783992,
+          "parse_ok": 0.9951923076923077,
+          "semantic_average": 0.6687215272087609,
+          "smatch": 0.8209616178426362
+        },
+        "delta": {
+          "condition_accuracy": 0.009014423076923017,
+          "dice": 0.009850763121436623,
+          "eos_rate": 0.0,
+          "grpo_raw": 0.02899630799201125,
+          "jaccard": 0.010158912644503193,
+          "max_length_rate": 0.0,
+          "overlap": 0.009795181419733678,
+          "paper_average": 0.008594595358619284,
+          "parse_ok": 0.0036057692307692735,
+          "semantic_average": 0.00993495239522435,
+          "smatch": 0.004153696530500239
+        },
+        "epoch45_baseline": {
+          "condition_accuracy": 0.9429086538461539,
+          "dice": 0.6517274961935539,
+          "eos_rate": 1.0,
+          "grpo_raw": 2.2326088408051317,
+          "jaccard": 0.6030406494773461,
+          "max_length_rate": 0.0,
+          "overlap": 0.7215915787697094,
+          "paper_average": 0.7472152599197799,
+          "parse_ok": 0.9915865384615384,
+          "semantic_average": 0.6587865748135365,
+          "smatch": 0.816807921312136
+        },
+        "gates": {
+          "csv_recomputed_exact": true,
+          "eos_at_least_0_98": true,
+          "max_length_zero": true,
+          "parse_at_least_0_98": true,
+          "pattern_accuracy_at_least_0_90": true,
+          "record_count_1664_unique": true,
+          "semantic_average_improved": true
+        }
+      },
+      "sampled": {
+        "all_gates_pass": true,
+        "current": {
+          "condition_accuracy": 0.9483173076923077,
+          "dice": 0.611547035696102,
+          "eos_rate": 1.0,
+          "grpo_raw": 2.160216646923617,
+          "jaccard": 0.5662140643418754,
+          "max_length_rate": 0.0,
+          "mean_generated_tokens": 6.936899038461538,
+          "overlap": 0.6798235140827664,
+          "paper_average": 0.7244513739899718,
+          "parse_ok": 0.9951923076923077,
+          "semantic_average": 0.6191948713735812,
+          "smatch": 0.8163549481368075
+        },
+        "delta": {
+          "condition_accuracy": 0.005408653846153855,
+          "dice": 0.01049781199352473,
+          "eos_rate": 0.0,
+          "grpo_raw": 0.026349611487966218,
+          "jaccard": 0.008518035904756083,
+          "max_length_rate": 0.0,
+          "overlap": 0.014348031480588164,
+          "paper_average": 0.008615202372887931,
+          "parse_ok": 0.005408653846153855,
+          "semantic_average": 0.011121293126289622,
+          "smatch": 0.0043034786394167135
+        },
+        "epoch45_baseline": {
+          "condition_accuracy": 0.9429086538461539,
+          "dice": 0.6010492237025773,
+          "eos_rate": 1.0,
+          "grpo_raw": 2.133867035435651,
+          "jaccard": 0.5576960284371193,
+          "max_length_rate": 0.0,
+          "overlap": 0.6654754826021783,
+          "paper_average": 0.7158361716170839,
+          "parse_ok": 0.9897836538461539,
+          "semantic_average": 0.6080735782472916,
+          "smatch": 0.8120514694973908
+        },
+        "gates": {
+          "csv_recomputed_exact": true,
+          "eos_at_least_0_98": true,
+          "max_length_zero": true,
+          "parse_at_least_0_98": true,
+          "pattern_accuracy_at_least_0_90": true,
+          "record_count_1664_unique": true,
+          "semantic_average_improved": true
+        }
+      }
+    },
+    "greedy_exit_code": 0,
+    "primary_gate_pass": true,
+    "sampled_exit_code": 0
+  },
+  "experiment": "CtrlHGen Phase D formal GRPO from C-IV epoch45 parent",
+  "generated_at": "2026-08-11T13:18:51.544639+08:00",
+  "processes": {
+    "evaluation_pid": 10470,
+    "initial_launcher_pid": 4228,
+    "resume_pid": 6237
+  },
+  "provenance": {
+    "config_file_sha256": "2cc8689f13d242a0e15f5d28b0cbe97d722a5b7aa86a8cbe47ca87f15badeaaa",
+    "config_path": "akgr/configs/reproduce/wn-pattern-full-train-author-aligned.yml",
+    "config_semantic_hash": "d7978678398d197265c879913d834f79fc9a344201832168a6282a60d1aec296",
+    "data_hash": "7f2fc89a9c629dedf06e243301e091fe53c4409093ba60e00d1069da591b6c47",
+    "git_clean": true,
+    "git_sha": "509212f80fb2e1cb219048a418477fbd6eec7e68",
+    "kg_hash": "ab2a80eabd45a86cc1dad1acfc65c20b36a451070737b054e903bb2025dda4a9",
+    "parent_metadata_sha256": "0e33477537a199122366c5b38ba9e07da9a8ba1afd82daea830e419cde8322d0",
+    "parent_model_sha256": "4d8660447884b1d72645618c2937efad840f70aee3ca7301e107d5ddc7a1e8b7",
+    "parent_pointer": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent",
+    "parent_pointer_record_sha256": "b8ae1bdfe3e9161222645a38c02c9e21887189fabbfb7fdca2274145c27fd33a",
+    "parent_resolved": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/conditional-epoch-45",
+    "sampling_manifest": "/mnt/workspace/ctrlhgen-data/WN18RR/full/seed-42/7f2fc89a9c62/sampling-manifest.json",
+    "sampling_manifest_sha256": "244ef264ad538df30ad58d72127d7fe3c31f52480dc3ddac882978400c49e460"
+  },
+  "schema_version": 1,
+  "status": "evaluation_audit_complete_pending_local_archive",
+  "times": {
+    "greedy_finished_at": "2026-08-11T12:58:33+08:00",
+    "greedy_started_at": "2026-08-11T12:58:18+08:00",
+    "initial_started_at": "2026-08-11T11:28:42+08:00",
+    "initial_stopped_at": "2026-08-11T11:49:06+08:00",
+    "resume_started_at": "2026-08-11T11:51:32+08:00",
+    "sampled_finished_at": "2026-08-11T12:58:56+08:00",
+    "sampled_started_at": "2026-08-11T12:58:33+08:00",
+    "training_finished_at": "2026-08-11T12:40:29+08:00"
+  },
+  "training": {
+    "actual_global_step": 13000,
+    "epoch": 1.0,
+    "evaluation_checkpoint": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/evaluation-step-13000",
+    "final_model": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/final-model",
+    "initial_exit_code": 143,
+    "interruption": {
+      "diagnosis": "/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/interruption-diagnosis-step4000.json",
+      "reason": "operator_stop: non-finite-free but pathological KL explosion observed in checkpoint-3800/3900 trainer_state (step-3500 aggregate kl=1703.2822414229752 loss=170.3287; prior step-2500 kl=43.26862094316818 grad_norm=23566.599609375); preserving same grpo output for diagnosis and explicit resume only",
+      "resume_history": [
+        {
+          "attempt": 1,
+          "diagnosis_sha256": "05123b5554f434398e629e89d24e6b908c8b3b2653ffee804fddc903a1a5a9f4",
+          "previous_exit_code": 143,
+          "resume_checkpoint": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-4000",
+          "started_at": "2026-08-11T11:51:32+08:00"
+        }
+      ]
+    },
+    "max_steps": 13000,
+    "maximum_logged_500_step_mean_kl": {
+      "step": 3500,
+      "value": 1703.2822414229752
+    },
+    "planned_global_step": 13000,
+    "resume_exit_code": 0,
+    "retained_resume_checkpoints": [
+      "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-12900",
+      "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/grpo/checkpoint-13000"
+    ],
+    "tensor_integrity": {
+      "checkpoint_12900": true,
+      "checkpoint_13000": true,
+      "evaluation_step_13000": true,
+      "final_model": true,
+      "nonfinite_tensors": 0
+    },
+    "terminal_metrics": {
+      "clip_ratio": 0.0,
+      "completion_length": 6.9695,
+      "epoch": 1.0,
+      "grad_norm": 4.065141201019287,
+      "kl": 1.4013922166777775,
+      "learning_rate": 0.0,
+      "loss": 0.1418,
+      "num_tokens": 5317846.0,
+      "reward": 2.7201649231910707,
+      "reward_std": 0.13784259780962022,
+      "rewards/condition_reward": 0.9045625,
+      "rewards/dice_reward": 0.9077719068527221,
+      "rewards/jaccard_reward": 0.9059199184179306,
+      "rewards/overlap_reward": 0.9115930805206299,
+      "step": 13000
+    }
+  }
+}

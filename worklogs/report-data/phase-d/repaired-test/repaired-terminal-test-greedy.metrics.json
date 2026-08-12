@@ -1,0 +1,11 @@
+{
+  "condition_accuracy": 0.9543269230769231,
+  "dice": 0.6870217097350009,
+  "eos_rate": 1.0,
+  "jaccard": 0.6366699750041087,
+  "max_length_rate": 0.0,
+  "mean_generated_tokens": 6.922475961538462,
+  "overlap": 0.761424661886317,
+  "parse_ok": 0.9921875,
+  "smatch": 0.8200635899223724
+}

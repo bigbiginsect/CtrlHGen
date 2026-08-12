@@ -1,0 +1,87 @@
+{
+  "decision": {
+    "classification": "promising_repaired_phase_d",
+    "health_pass": true,
+    "promising_rule": "greedy semantic-average delta >= 0.005 and sampled delta > 0"
+  },
+  "greedy": {
+    "baseline": {
+      "condition_accuracy": 0.9591346153846154,
+      "dice": 0.6745846087994327,
+      "eos_rate": 1.0,
+      "jaccard": 0.6196372905942767,
+      "max_length_rate": 0.0,
+      "mean_generated_tokens": 6.9405048076923075,
+      "overlap": 0.7454572758429223,
+      "parse_ok": 0.9993990384615384,
+      "smatch": 0.8283407934880364
+    },
+    "candidate": {
+      "condition_accuracy": 0.9615384615384616,
+      "dice": 0.6800606446469428,
+      "eos_rate": 1.0,
+      "jaccard": 0.6254789622664305,
+      "max_length_rate": 0.0,
+      "mean_generated_tokens": 6.9375,
+      "overlap": 0.7518350274006073,
+      "parse_ok": 0.9993990384615384,
+      "smatch": 0.8284497573740435
+    },
+    "delta": {
+      "condition_accuracy": 0.0024038461538461453,
+      "dice": 0.005476035847510108,
+      "eos_rate": 0.0,
+      "jaccard": 0.00584167167215377,
+      "overlap": 0.006377751557684941,
+      "parse_ok": 0.0,
+      "semantic_average": 0.005898486359116273,
+      "smatch": 0.00010896388600711848
+    },
+    "paired_semantic_average": {
+      "bootstrap_samples": 10000,
+      "ci95_high": 0.013257058922427421,
+      "ci95_low": -0.0017279950952159685,
+      "mean": 0.005898486359116623
+    }
+  },
+  "sampled": {
+    "baseline": {
+      "condition_accuracy": 0.9621394230769231,
+      "dice": 0.6310538629519207,
+      "eos_rate": 1.0,
+      "jaccard": 0.5791827703903587,
+      "max_length_rate": 0.0,
+      "mean_generated_tokens": 6.938701923076923,
+      "overlap": 0.6989558739199928,
+      "parse_ok": 0.9987980769230769,
+      "smatch": 0.8218009791357231
+    },
+    "candidate": {
+      "condition_accuracy": 0.9627403846153846,
+      "dice": 0.6445420465618288,
+      "eos_rate": 1.0,
+      "jaccard": 0.5928603821333657,
+      "max_length_rate": 0.0,
+      "mean_generated_tokens": 6.938100961538462,
+      "overlap": 0.7151845450030876,
+      "parse_ok": 0.9987980769230769,
+      "smatch": 0.8245445083095393
+    },
+    "delta": {
+      "condition_accuracy": 0.0006009615384614531,
+      "dice": 0.013488183609908111,
+      "eos_rate": 0.0,
+      "jaccard": 0.013677611743006968,
+      "overlap": 0.01622867108309478,
+      "parse_ok": 0.0,
+      "semantic_average": 0.01446482214533662,
+      "smatch": 0.0027435291738161505
+    },
+    "paired_semantic_average": {
+      "bootstrap_samples": 10000,
+      "ci95_high": 0.029054823175495677,
+      "ci95_low": -6.246347168456066e-05,
+      "mean": 0.014464822145336682
+    }
+  }
+}

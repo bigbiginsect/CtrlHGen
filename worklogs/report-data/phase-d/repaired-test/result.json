@@ -1,0 +1,171 @@
+{
+  "artifacts": {
+    "comparison.json": {
+      "bytes": 2827,
+      "path": "comparison.json",
+      "sha256": "77a8d647a61c760000b847fb25f24c4c24f8082570aa46fd6ed46f5d5abd154a"
+    },
+    "parent-test-greedy.jsonl": {
+      "bytes": 785727,
+      "path": "parent-test-greedy.jsonl",
+      "sha256": "961a05c1e779f7be13dc1174df4fcb0dcec2c163612a81f2432e969dbf49d408"
+    },
+    "parent-test-greedy.metrics.json": {
+      "bytes": 291,
+      "path": "parent-test-greedy.metrics.json",
+      "sha256": "f3f089223aa14457fa6df7deb9189919e1aca9f6d1ebe7f763a16f2386a20f14"
+    },
+    "parent-test-sampled.jsonl": {
+      "bytes": 783447,
+      "path": "parent-test-sampled.jsonl",
+      "sha256": "984c664627d7f5d3e9e5c0543f0676e911d4d3cc33f086f47bd01640d47a2920"
+    },
+    "parent-test-sampled.metrics.json": {
+      "bytes": 300,
+      "path": "parent-test-sampled.metrics.json",
+      "sha256": "07956f471d580a6ceb08d39cea48fb8c20ccfcc3aeb02c14a56ed629648dedc0"
+    },
+    "preflight.json": {
+      "bytes": 1275,
+      "path": "preflight.json",
+      "sha256": "3b2dd7819b60337b3d364eaedc4663ab405e1ef83ddf6666322fe3ced44f8b3e"
+    },
+    "repaired-terminal-test-greedy.jsonl": {
+      "bytes": 787173,
+      "path": "repaired-terminal-test-greedy.jsonl",
+      "sha256": "1db35f8701a2871027bd5e6a5e2269032b1476c9e6600b25b4ec5308a0b5df09"
+    },
+    "repaired-terminal-test-greedy.metrics.json": {
+      "bytes": 290,
+      "path": "repaired-terminal-test-greedy.metrics.json",
+      "sha256": "87f653c63b4584c63bc0cfed8eacb12df78a6f822e49c64f1b30a09845fb50c9"
+    },
+    "repaired-terminal-test-sampled.jsonl": {
+      "bytes": 784901,
+      "path": "repaired-terminal-test-sampled.jsonl",
+      "sha256": "eedbbbbd9e142bce6a5bcaa34885a69d835c9bbadabd9e1a5c61494c1ab1eab7"
+    },
+    "repaired-terminal-test-sampled.metrics.json": {
+      "bytes": 301,
+      "path": "repaired-terminal-test-sampled.metrics.json",
+      "sha256": "5f4150bf4ee68801dc524b9f4b3e8ea3d28d56ebffaecf644957304f51b8fc68"
+    }
+  },
+  "comparison": {
+    "decision": {
+      "classification": "pass",
+      "health_pass": true,
+      "post_test_training_or_checkpoint_selection_allowed": false,
+      "rule": "pass iff repaired terminal has positive Jaccard/Dice/Overlap average delta for greedy and sampled, with parse/EOS >= 0.98 and condition >= 0.90",
+      "semantic_both_decodes_positive": true
+    },
+    "greedy": {
+      "baseline": {
+        "condition_accuracy": 0.9429086538461539,
+        "dice": 0.6517274961935539,
+        "eos_rate": 1.0,
+        "jaccard": 0.6030406494773461,
+        "max_length_rate": 0.0,
+        "mean_generated_tokens": 6.921875,
+        "overlap": 0.7215915787697094,
+        "parse_ok": 0.9915865384615384,
+        "smatch": 0.8167598443890589
+      },
+      "candidate": {
+        "condition_accuracy": 0.9543269230769231,
+        "dice": 0.6870217097350009,
+        "eos_rate": 1.0,
+        "jaccard": 0.6366699750041087,
+        "max_length_rate": 0.0,
+        "mean_generated_tokens": 6.922475961538462,
+        "overlap": 0.761424661886317,
+        "parse_ok": 0.9921875,
+        "smatch": 0.8200635899223724
+      },
+      "delta": {
+        "condition_accuracy": 0.011418269230769273,
+        "dice": 0.03529421354144702,
+        "eos_rate": 0.0,
+        "jaccard": 0.033629325526762566,
+        "overlap": 0.039833083116607604,
+        "parse_ok": 0.0006009615384615641,
+        "semantic_average": 0.03625220739493906,
+        "smatch": 0.0033037455333134735
+      },
+      "paired_semantic_average": {
+        "bootstrap_samples": 10000,
+        "ci95_high": 0.047728655081578523,
+        "ci95_low": 0.025062183961685653,
+        "mean": 0.03625220739493916
+      }
+    },
+    "sampled": {
+      "baseline": {
+        "condition_accuracy": 0.9435096153846154,
+        "dice": 0.6057463878585133,
+        "eos_rate": 1.0,
+        "jaccard": 0.5599679221245295,
+        "max_length_rate": 0.0,
+        "mean_generated_tokens": 6.930889423076923,
+        "overlap": 0.6728742187849963,
+        "parse_ok": 0.9903846153846154,
+        "smatch": 0.8126981492065704
+      },
+      "candidate": {
+        "condition_accuracy": 0.9513221153846154,
+        "dice": 0.6502251977299771,
+        "eos_rate": 1.0,
+        "jaccard": 0.6048982915711183,
+        "max_length_rate": 0.0,
+        "mean_generated_tokens": 6.9248798076923075,
+        "overlap": 0.7162535555924936,
+        "parse_ok": 0.9939903846153846,
+        "smatch": 0.8168075464199342
+      },
+      "delta": {
+        "condition_accuracy": 0.0078125,
+        "dice": 0.0444788098714638,
+        "eos_rate": 0.0,
+        "jaccard": 0.04493036944658879,
+        "overlap": 0.04337933680749728,
+        "parse_ok": 0.0036057692307691624,
+        "semantic_average": 0.044262838708516626,
+        "smatch": 0.004109397213363897
+      },
+      "paired_semantic_average": {
+        "bootstrap_samples": 10000,
+        "ci95_high": 0.05990859927292234,
+        "ci95_low": 0.028635905226668142,
+        "mean": 0.044262838708516695
+      }
+    }
+  },
+  "finished_at": "2026-08-12T06:48:53.113732+00:00",
+  "kind": "phase_d_repaired_frozen_test",
+  "preflight": {
+    "code_sha": "3e60d37d7baa57d214f118a4e6ca37b2abe87e55",
+    "config_semantic_hash": "d7978678398d197265c879913d834f79fc9a344201832168a6282a60d1aec296",
+    "created_at": "2026-08-12T06:48:09.937101+00:00",
+    "data_manifest_sha256": "244ef264ad538df30ad58d72127d7fe3c31f52480dc3ddac882978400c49e460",
+    "decision_rule": "pass iff repaired terminal has positive Jaccard/Dice/Overlap average delta for greedy and sampled, with parse/EOS >= 0.98 and condition >= 0.90",
+    "decoding": [
+      "greedy",
+      "sampled"
+    ],
+    "kind": "phase_d_repaired_frozen_test_preflight",
+    "no_post_test_training_or_checkpoint_selection": true,
+    "parent_checkpoint": "/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/conditional-epoch-45",
+    "parent_model_config_hash": "6b931ee60a850991a7cce89baa46602f04c73340b49e2804dfe80f9aec4516c1",
+    "schema_version": 1,
+    "selection_frozen_before_test": true,
+    "split": "test",
+    "terminal": {
+      "checkpoint": "/mnt/workspace/ctrlhgen-runs/phase-d-repaired-full-20260811/control/grpo/checkpoint-13000",
+      "global_step": 13000,
+      "model_sha256": "674e6dae7e24fb891f4e6b2db6bd3c221ef0c1f1f8d71f8fabfc6aaa50a3eba2",
+      "trainer_state_sha256": "aeae300cbb2995c905bb8d0f7aaafc81aa4419e58ee3b82833877d0067b6b84c"
+    }
+  },
+  "schema_version": 1,
+  "status": "completed"
+}
