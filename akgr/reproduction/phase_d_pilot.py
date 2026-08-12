@@ -336,15 +336,20 @@ def _rollout_signal_audit(
     return audit
 
 
-def _evaluate_model(*, config, model, tokenizer, graph_samplers, device, output_dir: Path, label: str):
-    valid_dataset, _, _ = _datasets(config, ["valid"], train_variant="base")
+def _evaluate_model(
+    *, config, model, tokenizer, graph_samplers, device, output_dir: Path,
+    label: str, split: str = "valid", seed_namespace: str = "phase_d_repaired_pilot",
+):
+    if split not in {"valid", "test"}:
+        raise ValueError("Evaluation split must be valid or test")
+    dataset_dict, _, _ = _datasets(config, [split], train_variant="base")
     loader = _loader(
-        valid_dataset["valid"], config.raw["training"]["validation"]["batch_size"],
+        dataset_dict[split], config.raw["training"]["validation"]["batch_size"],
         config.seed, False,
     )
     output: dict[str, Any] = {}
     for decode, do_sample in (("greedy", False), ("sampled", True)):
-        seed_everything(derive_seed(config.seed, "phase_d_repaired_pilot", "validation", decode))
+        seed_everything(derive_seed(config.seed, seed_namespace, split, decode))
         records = _evaluation_records(
             config=config,
             dataloader=loader,
@@ -352,13 +357,13 @@ def _evaluate_model(*, config, model, tokenizer, graph_samplers, device, output_
             tokenizer=tokenizer,
             graph_samplers=graph_samplers,
             device=device,
-            split="valid",
+            split=split,
             condition_kind=config.condition,
             do_sample=do_sample,
         )
-        write_evaluation_jsonl(output_dir / f"{label}-valid-{decode}.jsonl", records)
+        write_evaluation_jsonl(output_dir / f"{label}-{split}-{decode}.jsonl", records)
         metrics = _aggregate_evaluation_metrics(records)
-        _write_json(output_dir / f"{label}-valid-{decode}.metrics.json", metrics)
+        _write_json(output_dir / f"{label}-{split}-{decode}.metrics.json", metrics)
         output[decode] = {"metrics": metrics, "records": records}
     return output
 
