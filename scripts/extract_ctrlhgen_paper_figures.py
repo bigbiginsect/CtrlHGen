@@ -19,7 +19,7 @@ except ImportError as exc:  # pragma: no cover - dependency guidance
 
 ROOT = Path(__file__).resolve().parents[1]
 PAPER = ROOT / "paper/Controllable_Logical_Hypothesis_Generation.pdf"
-OUTPUT = ROOT / "worklogs/figures/paper"
+OUTPUT = ROOT / "worklogs/reproduction/figures/paper"
 
 # Coordinates are in PDF points (1/72 inch), after visual inspection of the
 # repository copy.  Page indices are zero-based.

@@ -121,7 +121,7 @@ loss、optimizer step、LR 轨迹、checkpoint 新进程加载、record 唯一�
 | C-III author-aligned small | 6 层，Adam，LR `5e-5`，batch 160，50+50 | PA/Smatch 明显提高，但 J/D/O 下降，显示控制与集合语义并非同一维度 |
 | C-IV author-scale full | 仅把 train/pattern 从 1,024 扩到 8,000 | 五项全面跃升；确认实体监督覆盖是 small 版本的主要瓶颈 |
 
-![Phase C loss curves](figures/phase-c-loss-curves.png)
+![Phase C loss curves](../figures/phase-c-loss-curves.png)
 
 **图 1：四轮 Phase C 的训练 loss。** 图使用 DSW 原始逐 epoch history。不同轮中只有
 C-III→C-IV 是以训练规模为主要变量的受控比较；C-I conditional 的 loss 下降不能当作学习
@@ -163,7 +163,7 @@ v3 greedy 相对 v2，Pattern Accuracy 从 0.3185 升到 0.5883，Smatch 从 0.6
 模型更会生成指定的逻辑形状，并不保证其中的实体/关系实例化能命中目标答案集合。由于这一轮
 同时改变多个因素，我们不把现象单独归因于模型深度、optimizer 或 LR。
 
-![Phase C conditional validation](figures/phase-c-conditional-validation.png)
+![Phase C conditional validation](../figures/phase-c-conditional-validation.png)
 
 **图 2：conditional validation 轨迹。** C-I 是无效监督下的零线；C-II 的 Jaccard 近似
 横盘而 Pattern Accuracy 缓慢上升；C-III 明显强化控制；C-IV 在保持 v3 动力学时形成整体跃升。
@@ -227,7 +227,7 @@ greedy/sampled 分别提高 0.00993/0.01112，按当时预注册 gate 有效通�
 的数据，组内 completion 很容易获得相同 reward，relative advantage 信号稀疏。因此旧结果
 应作为诊断基线保留，而不是最终方法结果。
 
-![Phase D dynamics](figures/phase-d-training-dynamics.png)
+![Phase D dynamics](../figures/phase-d-training-dynamics.png)
 
 **图 3：原始与 repaired Phase D 的训练动力学。** 三轮都只有一个 GRPO epoch，所以横轴用
 optimizer step。原流程 reward 较高，主要因为 prompt 来自已经高度拟合的 SFT train；其
@@ -257,7 +257,7 @@ full repaired run 新采样 104,000 条 fresh RL-only 记录，并额外排除 p
 均值增益分别为 0.02631/0.02445/0.02884，始终高于继续门槛；terminal paired CI 为
 `[0.01897, 0.03885]`。sampled terminal 增益 0.03547，CI `[0.02017, 0.05091]`。
 
-![Phase D semantic gains](figures/phase-d-semantic-gains.png)
+![Phase D semantic gains](../figures/phase-d-semantic-gains.png)
 
 **图 4：repaired Phase D 从 pilot 到 full validation、再到唯一 frozen test 的三项均值增益。**
 误差线为逐样本 paired bootstrap 95% CI。pilot 只说明方向；full validation 和 frozen test 的
@@ -279,7 +279,7 @@ bake-off 中从未被访问。
 
 ## 7. 最终结果与论文对照
 
-![Final comparison](figures/final-metric-comparison.png)
+![Final comparison](../figures/final-metric-comparison.png)
 
 **图 5：最终 greedy frozen-test 与论文 Table 3 的尺度对照。** 论文值来自不同且未完全披露的
 设置，不能当作严格同分布显著性比较。
@@ -342,7 +342,8 @@ Jaccard、Dice、Overlap。这个形态与 Phase C 的覆盖分析、sampled 比
 
 ## 10. 可复核材料与重建方法
 
-报告使用的 compact 原始记录已从 DSW 按字节复制到 `worklogs/report-data/`：四轮 Phase C 的
+报告使用的 compact 原始记录已从 DSW 按字节复制到
+`worklogs/reproduction/report-data/`：四轮 Phase C 的
 unconditional/conditional history、原 Phase D 和 repaired pilot/full 的 trainer state、
 中断诊断、validation comparison 与 frozen-test aggregate。`sha256sums.txt` 可确认本地副本；
 大 checkpoint、完整 stdout 和逐样本 JSONL 仍保留在 DSW 的 `/mnt/workspace/ctrlhgen-*`。
@@ -369,11 +370,11 @@ MPLCONFIGDIR=/tmp/ctrlhgen-mpl \
 
 详细逐轮命令、Git SHA、config/data/KG hash、artifact SHA 和异常恢复记录，分别保存在：
 
-- `worklogs/phase-c-2026-08-10.md`
-- `worklogs/phase-d-2026-08-11.md`
-- `worklogs/phase-d-pilot-2026-08-11.md`
-- `worklogs/phase-d-repaired-full-2026-08-11.md`
-- `worklogs/phase-d-repaired-frozen-test-2026-08-12.md`
+- `worklogs/reproduction/phases/phase-c-2026-08-10.md`
+- `worklogs/reproduction/phases/phase-d-2026-08-11.md`
+- `worklogs/reproduction/phases/phase-d-pilot-2026-08-11.md`
+- `worklogs/reproduction/phases/phase-d-repaired-full-2026-08-11.md`
+- `worklogs/reproduction/phases/phase-d-repaired-frozen-test-2026-08-12.md`
 
 ## 11. 结论
 

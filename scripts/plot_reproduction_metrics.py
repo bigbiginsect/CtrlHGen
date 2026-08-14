@@ -2,7 +2,7 @@
 """Rebuild the figures used by the CtrlHGen reproduction report.
 
 The script consumes only compact, byte-for-byte copies of DSW JSON/JSONL
-records under ``worklogs/report-data``. It intentionally does not read model
+records under ``worklogs/reproduction/report-data``. It intentionally does not read model
 checkpoints or per-example prediction files.
 """
 
@@ -257,13 +257,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=Path("worklogs/report-data"),
+        default=Path("worklogs/reproduction/report-data"),
         help="Directory containing the compact DSW records.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("worklogs/figures"),
+        default=Path("worklogs/reproduction/figures"),
         help="Directory in which PNG figures are written.",
     )
     return parser.parse_args()

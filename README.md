@@ -110,7 +110,8 @@ Checkpoint paths are intentionally explicit.  Conditional SFT and GRPO accept
 only the selected checkpoint that passed the configured parse/EOS health gate;
 evaluation can load any compatible checkpoint.  The
 tiny profile is a smoke test, not a paper-result reproduction.  Only after it
-passes should the current Phase C plan in `worklogs/requirement-gap.md` be used.
+passes should the archived Phase C plan in
+`worklogs/reproduction/reports/requirement-gap.md` be consulted.
 The `full` profile reflects an author-code scale clue and must not be presented
 as a fully disclosed paper setting.
 
@@ -132,11 +133,12 @@ Phase D uses the C-IV post-hoc bake-off decision
 `conditional-epoch-45`.  The original `conditional-best` continues to resolve
 to epoch 50 and records the training-time lexicographic selection; it must not
 be substituted for the Phase D pointer.  Exact evidence, gates, commands, and
-provenance are maintained in `worklogs/requirement-gap.md` and
-`worklogs/phase-c-2026-08-10.md`.  Pilot checkpoints must never initialize a
-formal run, and neither training nor checkpoint selection may read the test
-split; the epoch 45 change is an explicitly documented post-hoc engineering
-decision based on an isolated frozen-test bake-off.
+provenance are maintained in
+`worklogs/reproduction/reports/requirement-gap.md` and
+`worklogs/reproduction/phases/phase-c-2026-08-10.md`.  Pilot checkpoints must
+never initialize a formal run, and neither training nor checkpoint selection
+may read the test split; the epoch 45 change is an explicitly documented
+post-hoc engineering decision based on an isolated frozen-test bake-off.
 
 The configuration loader retains the legacy `warmup_epochs` contract and also
 accepts an explicit optimizer/scheduler contract.  The two forms cannot be

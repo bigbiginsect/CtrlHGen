@@ -28,10 +28,10 @@ import build_ctrlhgen_teacher_briefing as evidence_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIG = ROOT / "worklogs/figures"
+FIG = ROOT / "worklogs/reproduction/figures"
 PAPER_FIG = FIG / "paper"
 REPRO_FIG = FIG / "briefing-minimal"
-STEM = ROOT / "worklogs/CtrlHGen-论文讲解与复现进展-2026-08-13-极简重制版"
+STEM = ROOT / "worklogs/reproduction/briefings/CtrlHGen-论文讲解与复现进展-2026-08-13-极简重制版"
 PPTX_OUT = STEM.with_suffix(".pptx")
 PDF_OUT = STEM.with_suffix(".pdf")
 MD_OUT = STEM.with_suffix(".md")
@@ -55,17 +55,17 @@ RED = RGBColor(156, 0, 6)
 NOTES = evidence_source.NOTES
 
 SOURCES = [
-    "论文 p.1 Abstract；worklogs/reproduction-report-2026-08-12.md 摘要",
+    "论文 p.1 Abstract；worklogs/reproduction/reports/reproduction-report-2026-08-12.md 摘要",
     "论文 p.2 Fig.1；p.4–5 Definition 3.1, Eq.(1–2)",
     "论文 p.3 Fig.2",
     "论文 p.4 Fig.3；p.5–7 Sec.3.2–3.4",
     "论文 p.5 Eq.(3)；p.7 Fig.4；p.15 Appendix A",
     "论文 p.6–7 Eq.(5–8)；p.10 Table 3",
     "论文 Sec.4.1 / Appendix B；综合报告 §3",
-    "综合报告 §4–6；worklogs/phase-a/b/c/d*.md",
-    "worklogs/figures/briefing-minimal/phase-c-conditional-loss.png；综合报告 §5.2",
-    "worklogs/figures/briefing-minimal/phase-c-jaccard-pattern-accuracy.png；综合报告 §5.3–5.4",
-    "综合报告 §5.5；worklogs/phase-c-2026-08-10.md",
+    "综合报告 §4–6；worklogs/reproduction/phases/phase-a/b/c/d*.md",
+    "worklogs/reproduction/figures/briefing-minimal/phase-c-conditional-loss.png；综合报告 §5.2",
+    "worklogs/reproduction/figures/briefing-minimal/phase-c-jaccard-pattern-accuracy.png；综合报告 §5.3–5.4",
+    "综合报告 §5.5；worklogs/reproduction/phases/phase-c-2026-08-10.md",
     "phase-d trainer_state / rollout audit / validation comparison",
     "repaired-test/comparison.json；论文 p.10 Table 3",
     "综合报告 §9, §11",

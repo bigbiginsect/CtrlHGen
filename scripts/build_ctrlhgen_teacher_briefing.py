@@ -28,10 +28,10 @@ from pptx.util import Inches, Pt
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT = ROOT / "worklogs/reproduction-report-2026-08-12.md"
+REPORT = ROOT / "worklogs/reproduction/reports/reproduction-report-2026-08-12.md"
 PDF = ROOT / "paper/Controllable_Logical_Hypothesis_Generation.pdf"
-DATA = ROOT / "worklogs/report-data"
-OUT_STEM = ROOT / "worklogs/CtrlHGen-论文讲解与复现进展-2026-08-13"
+DATA = ROOT / "worklogs/reproduction/report-data"
+OUT_STEM = ROOT / "worklogs/reproduction/briefings/CtrlHGen-论文讲解与复现进展-2026-08-13"
 PPTX_OUT = OUT_STEM.with_suffix(".pptx")
 SCRIPT_OUT = OUT_STEM.with_suffix(".md")
 PDF_OUT = OUT_STEM.with_suffix(".pdf")
@@ -69,12 +69,12 @@ def approx(actual: float, expected: float, tol: float = 1e-9) -> None:
 
 
 def load_evidence() -> dict:
-    comparison = load_json("worklogs/report-data/phase-d/repaired-test/comparison.json")
-    pilot = load_json("worklogs/report-data/phase-d/repaired-pilot/validation-comparison.json")
-    full = load_json("worklogs/report-data/phase-d/repaired-full/validation-comparison.json")
-    rollout = load_json("worklogs/report-data/phase-d/repaired-full/rollout-signal-audit.json")
-    original_state = load_json("worklogs/report-data/phase-d/original/trainer_state.json")
-    repaired_state = load_json("worklogs/report-data/phase-d/repaired-full/trainer_state.json")
+    comparison = load_json("worklogs/reproduction/report-data/phase-d/repaired-test/comparison.json")
+    pilot = load_json("worklogs/reproduction/report-data/phase-d/repaired-pilot/validation-comparison.json")
+    full = load_json("worklogs/reproduction/report-data/phase-d/repaired-full/validation-comparison.json")
+    rollout = load_json("worklogs/reproduction/report-data/phase-d/repaired-full/rollout-signal-audit.json")
+    original_state = load_json("worklogs/reproduction/report-data/phase-d/original/trainer_state.json")
+    repaired_state = load_json("worklogs/reproduction/report-data/phase-d/repaired-full/trainer_state.json")
     report_text = REPORT.read_text(encoding="utf-8")
 
     # Verify the compact evidence copies before consuming them.
@@ -359,7 +359,7 @@ def build_deck(e: dict) -> Presentation:
         add_text(slide, 10.72, 2.38+i*.92, .42, .35, num, size=13, color=RGBColor(126, 206, 193), bold=True, font=FONT_EN)
         add_text(slide, 11.16, 2.31+i*.92, 1.16, .48, txt, size=13.5, color=WHITE, bold=True)
     add_text(slide, .76, 6.37, 8.5, .32, "汇报人：bigbiginsect  ·  2026-08-13", size=12, color=MUTED)
-    cover_source = "论文 p.1 Abstract；worklogs/reproduction-report-2026-08-12.md 摘要"
+    cover_source = "论文 p.1 Abstract；worklogs/reproduction/reports/reproduction-report-2026-08-12.md 摘要"
     add_footer(slide, cover_source, "我们的分析")
     add_notes(slide, NOTES[0], cover_source)
 
@@ -476,7 +476,7 @@ def build_deck(e: dict) -> Presentation:
     add_text(slide, 6.98, 5.93, 5.35, .3, "我们的分析：Overlap 可能对完全包含的过生成过于宽容", size=12.5, color=MUTED, align=PP_ALIGN.CENTER)
 
     # 7 — Scope
-    slide = add_slide(prs, "我们的复现范围与忠实度边界", "REPRO · SCOPE", "worklogs/reproduction-report-2026-08-12.md §1, §3", "复现实证", NOTES[6])
+    slide = add_slide(prs, "我们的复现范围与忠实度边界", "REPRO · SCOPE", "worklogs/reproduction/reports/reproduction-report-2026-08-12.md §1, §3", "复现实证", NOTES[6])
     add_rich_text(slide, .72, 1.2, 11.92, .7, [("定位：", TEAL, True, FONT_CN), ("方法与主要现象的高质量复现", NAVY, True, FONT_CN), ("  ≠  论文绝对数值逐点复刻", RED, True, FONT_CN)], size=21, fill=WHITE, line=LINE, align=PP_ALIGN.CENTER)
     cols=[(.72,"论文正文","12 层 GPT-2\nAdamW · LR 1e−5\nbatch 256 · 400+50 epoch\n4 × NVIDIA A6000",PALE_BLUE,BLUE),
           (4.68,"作者代码意图","GPT2_6 / num_layers: 6\nAdam · LR 5e−5\nWN batch 160\n5-step warm-up",AMBER_LIGHT,AMBER),
@@ -488,7 +488,7 @@ def build_deck(e: dict) -> Presentation:
     add_text(slide, .92, 5.83, 11.4, .45, "范围：WN18RR · pattern condition · 13 patterns · test 1,664 · single seed", size=17, color=NAVY, bold=True, align=PP_ALIGN.CENTER)
 
     # 8 — Timeline
-    slide = add_slide(prs, "复现路线图：从“能跑”到“可信”", "REPRO · JOURNEY", "worklogs/phase-a/b/c/d*.md；综合报告 §4–6", "复现实证", NOTES[7])
+    slide = add_slide(prs, "复现路线图：从“能跑”到“可信”", "REPRO · JOURNEY", "worklogs/reproduction/phases/phase-a/b/c/d*.md；综合报告 §4–6", "复现实证", NOTES[7])
     y=3.42
     line=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(.88), Inches(y), Inches(12.35), Inches(y)); line.line.color.rgb=LINE; line.line.width=Pt(3)
     events=[(.95,"A/B","基础设施\n+ tiny smoke",BLUE), (2.55,"C-I","五项全 0",RED), (4.05,"FIX 1","监督契约",TEAL),

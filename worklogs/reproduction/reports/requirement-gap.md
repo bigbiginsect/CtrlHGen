@@ -6,15 +6,16 @@
 >
 > 运行原则：本地修改、提交并推送到 `origin`；DSW 只部署并运行精确 commit SHA。
 
-> **最终报告入口：** `worklogs/reproduction-report-2026-08-12.md`。本交接文档第 12 节记录的
+> **最终报告入口：** `worklogs/reproduction/reports/reproduction-report-2026-08-12.md`。本交接文档第 12 节记录的
 > 是第一轮正式 Phase D；之后完成的 fresh RL-only + 末尾 `SEP` repaired Phase D 已通过唯一
-> frozen-test，并取代旧轮成为最终方法结果。详细证据见 `worklogs/phase-d-pilot-2026-08-11.md`、
-> `worklogs/phase-d-repaired-full-2026-08-11.md` 和
-> `worklogs/phase-d-repaired-frozen-test-2026-08-12.md`。
+> frozen-test，并取代旧轮成为最终方法结果。详细证据见
+> `worklogs/reproduction/phases/phase-d-pilot-2026-08-11.md`、
+> `worklogs/reproduction/phases/phase-d-repaired-full-2026-08-11.md` 和
+> `worklogs/reproduction/phases/phase-d-repaired-frozen-test-2026-08-12.md`。
 
 本文是后续 agent 的当前路线入口。前三次 small Phase C 和第四次 full-train 数据规模消融的
 配置、曲线、指标、原始证据路径和 SHA256 单独保存在
-`worklogs/phase-c-2026-08-10.md`。历史记录不能被改写成后续阶段的预设结论。
+`worklogs/reproduction/phases/phase-c-2026-08-10.md`。历史记录不能被改写成后续阶段的预设结论。
 
 ## 1. 当前状态
 
@@ -353,8 +354,8 @@ greedy/sampled 五项指标、v2/v3/C-IV/论文对照、失败项与单 seed 局
 
 后续 agent 的固定顺序：
 
-1. 阅读本文和 `worklogs/phase-c-2026-08-10.md`；
-2. 用 `worklogs/phase-c-2026-08-10.md` 第 8 节的路径/hash 核验 C-IV 原始证据；
+1. 阅读本文和 `worklogs/reproduction/phases/phase-c-2026-08-10.md`；
+2. 用 `worklogs/reproduction/phases/phase-c-2026-08-10.md` 第 8 节的路径/hash 核验 C-IV 原始证据；
    DSW 收尾后应为 `Stopped`，不要为只读文档工作重启实例；
 3. 若明确授权 Phase D，先冻结 GRPO 的目标、成功口径和一次 test 契约；
 4. 重启 DSW 后核对 checkout、manifest 和 C-IV `phase-d-parent`，确认它解析到
@@ -522,4 +523,4 @@ GRPO raw reward 提高 `+0.02900/+0.02635`，五项均值提高 `+0.00859/+0.008
 通过。完整过程、恢复历史、命令、哈希、路径和指标保存在
 `/mnt/workspace/ctrlhgen-runs/phase-d-formal-20260811-epoch45/phase-d-result.json`，其 SHA256 为
 `37e3042c1dee892b47ae018e3be7dc1e43e6aa2451c131810530eea2f06139ae`。详细本地记录见
-`worklogs/phase-d-2026-08-11.md`。
+`worklogs/reproduction/phases/phase-d-2026-08-11.md`。

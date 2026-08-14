@@ -25,8 +25,8 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "worklogs/report-data"
-OUTPUT = ROOT / "worklogs/figures/briefing-minimal"
+DATA = ROOT / "worklogs/reproduction/report-data"
+OUTPUT = ROOT / "worklogs/reproduction/figures/briefing-minimal"
 
 BLACK = "#1A1A1A"
 DARK_GRAY = "#666666"

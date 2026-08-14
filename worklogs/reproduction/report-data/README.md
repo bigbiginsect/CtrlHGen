@@ -7,7 +7,7 @@ full stdout logs remain under `/mnt/workspace/ctrlhgen-*` on DSW.
 
 The files are copied byte-for-byte and indexed by `sha256sums.txt`. Run
 `python scripts/plot_reproduction_metrics.py` from the repository root to
-rebuild the report figures.
+rebuild the report figures under `worklogs/reproduction/figures/`.
 
 Directory mapping:
 
