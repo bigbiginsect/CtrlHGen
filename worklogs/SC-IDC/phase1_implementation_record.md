@@ -183,6 +183,26 @@ record-condition 权重单元，共记录 13,279 次执行。全部单次硬门�
 `epsilon=0.01` 与主阈值结果相同；`epsilon=0.05` 时 strict effective 为 75.84%，laundering
 为 24.16%。这些数字只描述 reference query 的逻辑机制，不支持模型 semantic-control 结论。
 
+## Phase 2 术语与证据边界补充
+
+第一阶段已经归档的 JSON schema、测试断言和上表列名保持原样，以保证产物 hash、复现实验记录
+和代码 SHA 可核验；这些历史字段不应继续按字面作更强解释。后续文档与 Phase 2 实现统一使用：
+
+| Phase 1 历史字段 | 后续解释 |
+|---|---|
+| `strict_effective` | `branch_supported_selective`：受控 occurrence 位于有边际的最近逻辑分支中，且当前值优于匹配替代值 |
+| `laundered` | 对自然 reference 只解释为 `branch_nonmarginal`；仅在人工标注的 OR 遮蔽对抗样例中计作 laundering detection |
+| `marginal_only` | `branch_supported_nonselective`：分支有边际，但未识别出当前值相对匹配替代的正优势 |
+
+因此，上表的 23.56% 是 **branch-nonmarginal reference occurrences**，不是“模型 laundering
+比例”，也不能证明 gold query 有意规避控制。反过来，两个 delta 都为正也只支持
+branch-supported selectivity，不能证明 controlled predicate 本身不可删除或具有因果必要性。
+
+第一阶段按 occurrence 枚举并在 record-condition 内赋予权重，是 reference attribution 审计，
+不是 Phase 2 的 prompt 采样规则。specific-relation prompt 只暴露 relation value；Phase 2 必须按
+unique relation values 采样，并对生成假设中该值的全部 occurrences 联合干预。对应代码迁移、
+兼容策略和验收顺序记录在 `worklogs/SC-IDC/phase2_contract_handoff.md`，不回写第一阶段历史产物。
+
 ## 延期范围
 
 以下内容不属于第一阶段代码变更：
