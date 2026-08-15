@@ -2,241 +2,202 @@
 
 更新日期：2026-08-15
 
-## 文档目的
+## 文档职责
 
-本文记录 specific-relation 模型实验启动前必须实现的工程契约和验收顺序，供后续 agent 接手。
-本轮只修订文档，没有修改训练、审计或奖励代码，也没有据此启动 SFT/GRPO。
+本文只记录 Phase 2 的工程状态、依赖和验收 checklist。研究定义、公式、实验问题与报告口径以
+`worklogs/SC-IDC/innovate_proposal.md` 为唯一来源；这里不复制另一套 A/B/C/D 实验命名。
 
-Phase 2 的模型级范围仅为 `specific_relation`：
+本轮模型级范围仅为 `specific_relation`。截至本文更新时，Phase 2 尚未启动 SFT/GRPO；最近两次
+提交只修订文档，没有实现下面列出的缺口。
+
+## 最小依赖图
 
 ```text
-工程契约与 value-level joint core
-                 │
-                 ▼
-       Experiment B（硬门禁）
-                 │
-                 ▼
-specific-relation conditional SFT
-                 │
-                 ▼
- Experiment A + C-pre（同批 rollout）
-                 │
-          A 通过 │ A 失败 → 停止
-                 ▼
-       Experiment D 配对 GRPO
-                 │
-                 ▼
-       Experiment C-post 分析
+数据/SFT 工作线                         reward 工作线
+parent import                           value-level joint core
+unique-value sampler                    matcher + reward adapter
+frozen condition manifests              adversarial/regression tests
+        │                                      │
+        ▼                                      │
+specific-relation conditional SFT              │
+        └──────────────────┬───────────────────┘
+                           ▼
+                  Experiment 1 离线信号审计
+                           │
+                           ▼
+                  Experiment 2 配对 GRPO
+                           │
+                           ▼
+                 总体 + topology 分层报告
 ```
 
-字母不表示执行顺序：B 是机制门禁，A 是奖励信号门禁，C 是复用既有输出的分层诊断，D 是正式
-配对 GRPO。C 不训练第三个模型。
+两条工作线可以并行。reward preflight 必须在 Experiment 1 前通过，但不人为阻断 conditional SFT；
+数据/SFT preflight 只阻断 conditional SFT。
 
-不在本阶段声称 entity control、pattern control 或其他 structural controls 已获得模型级验证。
+## 已冻结的任务契约
 
-## 已冻结的任务定义
-
-### 1. 控制单位是 unique relation value
+### 1. 控制单位
 
 prompt 只提供 relation value \(C\)，不提供 AST path 或 slot role。因此：
 
-- SFT train 从目标假设的 unique relation values 中均匀采样；重复 occurrence 不增加该值的采样权重；
-- validation、test、rollout signal set 和正式 RL train 的
-  `(record_id, condition_kind, condition_value)` 必须物化、冻结并 hash；
-- 两个 GRPO 分支必须共享同一份 RL prompt/condition manifest；
-- 如果未来要控制具体 slot，必须把 path/role 加入 prompt，并作为另一个任务处理。
+- train 从目标假设的 unique relation values 中均匀采样；重复 occurrence 不增加采样权重；
+- validation、signal、正式 RL train 和最终 evaluation 的
+  `(record_id, condition_kind, condition_value)` 分别物化、冻结并 hash；
+- 两个 GRPO 分支共享同一份 RL condition manifest；
+- 需要控制具体 slot 时必须把 path/role 加入 prompt，那是另一个任务。
 
-train condition 可以通过 `seed + record_id + epoch` 动态派生；所有用于 checkpoint 选择、跨分支
-比较或最终报告的 condition 都必须固定。test condition manifest 由隔离的 split-preparation 步骤
-生成并封存，训练、signal gate 和 checkpoint 选择不得加载。
+train condition 可由 `seed + record_id + epoch` 动态派生。所有用于 checkpoint 选择、跨分支比较或
+最终报告的 condition 都必须固定；最终 evaluation/test manifest 在隔离步骤中生成和封存。
 
 ### 2. 同值 occurrences 联合干预
 
-若生成假设中 \(C\) 出现多次：
+生成假设中 \(C\) 出现多次时：
 
 - nominal adherence 判断至少存在一个合法 occurrence；
-- matched intervention 将全部 \(C\) occurrences 同时替换为同一个 \(C'\)；
-- branch intervention 联合中性化各 occurrence 所属、去重后的最近 `i/u` 直接子分支；
-- 嵌套待中性化 path 只保留 ancestor-most path；任一 occurrence 没有 `i/u` 祖先时，联合基线
-  整体退化为空根查询；
-- 逐 occurrence 结果只用于 attribution，不构成彼此独立的训练样本或 reward 求和项。
+- matched intervention 把全部 \(C\) occurrences 同时替换为同一个 \(C'\)；
+- branch intervention 联合中性化去重后的最近 `i/u` 分支；
+- 嵌套分支只保留 ancestor-most path；任一 occurrence 无 `i/u` 祖先时使用 root marker；
+- 逐 occurrence 结果只用于 attribution，不构成独立训练样本，也不求和进主 reward。
 
-### 3. 指标只支持 branch-level 论断
+### 3. 论断边界
 
-后续代码与报告使用：
+Phase 2 使用 `branch_nonmarginal`、`branch_supported_nonselective`、
+`branch_supported_selective` 和 `unscorable`。Phase 1 的 `strict_effective`、`laundered`、
+`marginal_only` 仅作为 legacy schema 保留。
 
-- `branch_nonmarginal`；
-- `branch_supported_nonselective`；
-- `branch_supported_selective`；
-- `unscorable`。
+自然 reference/model outputs 的 branch-nonmarginal 不得称为 laundering；laundering detection 只用于
+有标签的 OR 遮蔽对抗集。branch marginal 与 matched delta 同时为正也不能声称 predicate necessity。
 
-Phase 1 的 `strict_effective`、`laundered`、`marginal_only` 是 legacy schema。自然 reference/model
-outputs 的 branch-nonmarginal 比例不得称为 laundering；laundering detection 只用于已标注的 OR
-遮蔽对抗集。即使 branch marginal 与 matched delta 都为正，也不能声称 predicate necessity。
+### 4. 主对照名称
 
-### 4. 主对照的准确名称
+对照组名为 `uniform-value control + original-reward baseline`，不是“原始 CtrlHGen baseline”，
+因为原实现使用 fixed-first condition。它与 SC-IDC 分支共享 parent、manifests、训练配置和 seeds，
+唯一方法差异是是否加入 SC-IDC reward。
 
-从同一个 uniform-value specific-relation conditional SFT parent 分叉后，对照组名为：
+## 当前实现缺口
 
-`uniform-value control + original-reward baseline`
+下列事项均未完成：
 
-它不是原始 CtrlHGen baseline，因为原实现使用 fixed-first condition。两分支唯一的方法差异应是
-是否加入 SC-IDC reward；prompt manifest、初始化权重、generation 参数、optimizer 和 seed 相同。
+1. `condition_value_from_target()` 仍是 fixed-first 行为；
+2. Phase 1 SC-IDC core 仍以单 slot/path 为干预单位并输出 legacy 分类；
+3. checkpoint loader 仍要求完整 semantic hash 一致，尚无显式 cross-condition parent import；
+4. fresh-RL verifier 仍绑定 source config semantic hash，尚无 condition-agnostic rebind；
+5. 尚无冻结的 Phase 2 condition manifests；
+6. 尚无 compute-bounded relation matcher、value-level reward adapter 和 signal-audit runner；
+7. 尚未把 SC-IDC reward 接入 GRPO；
+8. 尚未运行 specific-relation conditional SFT 或任何 Phase 2 模型实验。
 
-## 当前代码与 Phase 2 之间的缺口
+不得通过放宽现有通用 hash/checkpoint verifier 绕过第 3、4 项。
 
-以下是后续实现事项，不表示本轮已经完成：
+## 数据/SFT 工作线
 
-1. `condition_value_from_target()` 仍是 fixed-first 行为；不得直接用于 Phase 2 unique-value 采样。
-2. Phase 1 SC-IDC core 以单 slot/path 为干预单位，输出 legacy 分类字段；训练版需要 value-level
-   joint intervention，同时保持旧审计入口和历史 schema 可复现。
-3. 通用 checkpoint loader 要求完整 semantic hash 一致，不能直接把旧 unconditional parent 导入
-   新 `specific_relation` config。
-4. Phase 1 fresh-RL verifier 绑定 source config semantic hash，不能直接把 pattern artifact 当作新
-   condition config 的 manifest。
-5. 尚无冻结的 validation/RL condition manifests、训练版 compute-bounded matcher、signal-gate
-   runner、Phase 2 value-view Experiment B、C-pre/C-post 汇总或 SC-IDC GRPO reward 接入。
+### Data-1. 显式导入契约
 
-不得为绕过第 3、4 项而放宽现有通用 hash 校验。
+实现 `import-unconditional-parent`：
 
-## 必须新增的显式导入契约
+- 验证 source stage/config、data/KG、model architecture、tokenizer 和 checkpoint SHA；
+- 记录 target config 与导入命令；
+- 重置 optimizer/scheduler；
+- 任一 identity 不匹配时 fail closed。
 
-### import-unconditional-parent
+实现 `condition-agnostic fresh-query rebind`：
 
-允许跨 condition 导入冻结的 unconditional 权重，但必须验证并记录：
+- 验证 source artifact/sampling manifest、data/KG、record IDs、去重和 split 排除关系；
+- 生成新的 target config 与 condition manifests，同时保留 source lineage；
+- 不改写旧 artifact 或旧 manifest。
 
-- source stage 与 source config hash；
-- data hash 与 KG hash；
-- model architecture/config identity；
-- tokenizer identity；
-- checkpoint 文件 SHA；
-- target config hash 和导入命令。
+验收由合法导入测试和 source/target hash、checkpoint/artifact 篡改、错误 stage、tokenizer/model
+不一致、split 污染拒绝测试组成。
 
-导入后必须重置 optimizer/scheduler，不继承旧训练状态。失败时 fail closed，不回退到宽松加载。
-
-### condition-agnostic fresh-query rebind
-
-允许把已验证的 fresh query 数据重新绑定到 target condition config，但必须验证并记录：
-
-- source artifact 与 sampling manifest SHA；
-- data/KG identity；
-- record IDs；
-- query/supervision 去重；
-- 与 validation/test 的 split 排除关系；
-- source/target config hash；
-- 新 condition manifest 的 SHA。
-
-旧 manifest 不改写；rebind 生成新 manifest，并保留完整 lineage。
-
-## 后续实现顺序与验收
-
-### 1. 兼容的数据结构与术语迁移
-
-- 为 value-level condition、joint intervention 和新分类增加独立版本/schema；
-- 保持 Phase 1 audit 的旧入口、旧字段和历史 hash 可复现；
-- 实现 repeated-value joint replacement、ancestor-most branch antichain 和 root-marker baseline。
-
-验收：Phase 1 原测试和确定性 fixture 不变，新 joint-occurrence 与嵌套反例测试通过。
-
-### 2. 实现两个导入契约
-
-- 实现 `import-unconditional-parent`；
-- 实现 fresh-query rebind；
-- 覆盖 source/target hash、checkpoint/artifact 篡改、错误 stage、tokenizer/model 不一致和 split
-  污染的拒绝测试。
-
-验收：合法导入产生完整 lineage；任一 identity 不匹配都拒绝，现有通用 verifier 不变。
-
-### 3. 冻结 condition manifests
+### Data-2. Unique-value sampler 与 manifests
 
 - train 使用可复现的动态 unique-value sampler；
-- validation、test、signal 和正式 RL train 分别物化 condition manifest；
-- 两个 GRPO 分支只接受同一 RL manifest hash。
+- validation、signal、RL train 和最终 evaluation 分别物化 manifests；
+- 重复 relation value 不按 occurrence 数过采样；
+- 固定 seed 逐字节一致；
+- 两个 GRPO 分支拒绝不同的 RL manifest hash；
+- 训练与调参进程不能加载封存的最终 evaluation/test manifest。
 
-验收：重复 relation value 不被 occurrence 数量加权；固定 seed 逐字节一致；不同 split 无 identity
-重合；checkpoint 选择始终使用固定 validation conditions；sealed test manifest 在最终评估前未被
-训练或调参进程加载。
+### Data-3. conditional SFT
 
-### 4. 运行 Experiment B 机制门禁
-
-- B0：OR-append laundering 对抗集，同时覆盖单 occurrence 和重复 condition value；
-- B1：嵌套冗余反例
-  \(H=(A\land C)\lor D,\ [A\land C]_G=[A]_G\)，两个 delta 可正但不得输出 necessity claim；
-- B2 legacy view：Phase 1 executor parity、结构保持与确定性 fixture 不变；
-- B2 value view：按 unique relation values 加权，审计同值 occurrences 的联合替换与联合中性化。
-
-验收：proposal 中 B0/B1/B2 的所有硬门槛通过。Phase 1 已有的 single-slot 结果只能作为 legacy
-regression baseline，不能替代修改 joint core 后的 Experiment B。任一子项失败都不启动 SFT。
-
-### 5. 运行 specific-relation conditional SFT
+数据/SFT preflight 通过后即可启动，不必等待完整 reward reference audit。训练必须：
 
 - 从显式导入的同一 unconditional parent 开始；
-- 使用 unique-value train sampler 和固定 validation manifest；
-- 保存 source/target config、parent checkpoint 和 condition manifest lineage。
+- 使用 uniform unique-value train sampler 和固定 validation manifest；
+- 保存 parent、source/target config 和 condition lineage；
+- 只用 validation 选择 checkpoint；
+- 报告 loss、parse、EOS 和 nominal adherence，并验证 checkpoint 可重载。
 
-验收：parse/EOS、nominal adherence 与训练 provenance 完整；SFT checkpoint 冻结后才允许生成
-Experiment A rollout。
+冻结的 SFT checkpoint 是 Experiment 1 和两个 GRPO 分支的共同 parent。
 
-### 6. 实现并运行 Experiment A signal gate 与 C-pre
+## Reward 工作线
 
-signal set 必须是 train-graph-only，且与 conditional SFT train、正式 RL train、validation/test 的
-query/supervision identity 不重合。冻结：
+### Reward-1. Joint core 与兼容迁移
 
-- \(\tau_{\mathrm{marg}}=\tau_{\mathrm{match}}=0.1\)；
-- \(\alpha_{\mathrm{IDC}}\in\{0.25,0.5,1.0\}\)，按 proposal 的预注册门槛选通过条件的最小值；
-- 现有 GRPO KL 系数保持 \(\beta_{\mathrm{KL}}=0.1\)，不得与新增奖励系数复用字段或符号；
-- 全部同值 occurrences 联合聚合；
+- 为 value-level joint intervention 增加独立 schema/API；
+- 保持 Phase 1 audit 入口、legacy schema 和历史 fixtures 可复现；
+- 实现 repeated-value joint replacement、joint branch neutralization、ancestor-most antichain 和
+  root marker；
+- 逐 occurrence attribution 不进入主 reward。
+
+### Reward-2. Matcher 与 reward adapter
+
+- 训练版 relation matcher 只用静态可缓存特征预筛，最终执行 \(K=3\) joint replacements；
+- 同一 completion 的全部 \(C\) occurrences 共享每个 \(C'\)；
+- base denotation 在基础 reward 与 SC-IDC 之间共享，其他执行按 canonical query hash 缓存；
 - parse-fail、nominal-fail、unscorable 的 SC-IDC 附加项为 0；
-- 13 个 pattern 各 16 个 prompts、每 prompt 4 generations，共 208 groups/832 completions；
-- relation 静态特征排序后从最佳 8 个确定性采样 \(K=3\)，每个 scorable completion 最多 5 次
-  总图执行；
-- candidate seed 由 `(reward_seed, record_id, canonical_query_hash, condition_value)` 派生；同一
-  condition value 的全部 occurrences 共享每个 replacement；
-- base/neutral/replacement denotation 缓存规则和候选表 hash。
+- 记录 candidate table、fallback、scorable status、执行数与 wall-time。
 
-验收：nominal/scorable、非相同 completion reward-tie 降幅、semantic ranking inversion、执行成本
-和确定性全部达到 proposal 门槛。若任何 \(\alpha_{\mathrm{IDC}}\) 都不通过，停止，不启动 GRPO。
+### Reward-3. 必须通过的 preflight tests
 
-C-pre 复用同一批 208 groups/832 completions，按 target condition value 的 first-only、
-non-first-only、repeated occurrence topology 报告分层 support 和指标，不额外生成 rollout、不训练
-模型，也不参与 \(\alpha_{\mathrm{IDC}}\) 选择。少于 30 prompts 的分层不作泛化结论。
+- OR-append 遮蔽：单 occurrence 与 repeated value 均得到 joint branch marginal 0；
+- nested redundancy：允许两个 delta 为正，但 schema 不产生 necessity claim；
+- Phase 1 executor parity、结构保持与确定性 fixtures 不回归；
+- joint replacement 保持 AST、pattern、relation/entity 数量和目标 occurrence 数量；
+- unique-value weighting、fallback、root marker 和 antichain 正确；
+- train-graph reference audit 不访问 test，结果可复现。
 
-### 7. 启动 Experiment D 配对 GRPO
+scorable coverage 是报告指标，不强制 reference 上达到 100%；若覆盖不足，应检查 matcher，而不是
+自动放宽匹配条件。
 
-Experiment A 通过后才从同一冻结 SFT checkpoint 分叉。报告三个互补视图：
+## 两个模型实验
 
-- update-matched：相同 optimizer updates，SC-IDC 承担并报告额外成本；
-- graph-execution-matched：按累计图执行数对齐最近的不超预算 checkpoint；
-- wall-time-matched：按累计 wall-time 对齐最近的不超预算 checkpoint。
+### Experiment 1：离线信号审计
 
-图执行数和 wall-time 分别成轴；不得声称一组运行天然同时满足“相同步数”“相同图执行数”和
-“相同 wall-time”。
+必须同时具备冻结 SFT parent 和通过 preflight 的 reward core。按照 proposal 的 train-only signal
+set 对同一批 completions 计算 base reward、raw SC-IDC 与候选 augmented rewards。
 
-### 8. 运行 C-post 冻结分层分析
+硬停止条件仅包括：不可复现、split 泄漏、少于 30 个 informative groups、raw SC-IDC 无法在任何
+一部分 informative groups 中提供区别于 base reward 的 action-level ordering、出现实现导致的
+Pareto-harmful inversion，或成本超出本轮预先声明的资源预算。base reward 存在 ties 时还必须报告
+能解开多少；其他比例连同 bootstrap 区间报告，不使用武断的通用百分比门槛。
+\(\alpha_{\mathrm{IDC}}\) 只使用该 train-only signal set 选择并冻结。
 
-在 D 的两个分支上复用 C-pre 的 topology 定义与冻结 manifests，报告分层 nominal、branch
-support、matched selectivity、branch-supported selectivity、branch-nonmarginal、语义质量和
-复杂度。C-post 不选择 checkpoint、不修改 reward、不反向调参，也不训练第三个模型。
+### Experiment 2：配对 GRPO
 
-## 预计涉及的代码范围
+- baseline 与 SC-IDC 从同一冻结 SFT checkpoint 分叉；
+- 共享 RL manifest、generation/optimizer 配置、每个 seed 的 update 数；
+- 主结果 update-matched，并报告累计图执行数和 wall-time；
+- compute-matched 曲线只在既有 checkpoints 足够时补充，不为制造三套视图强制追加训练；
+- 先做单 seed pilot；正式稳定性结论原则上至少 3 seeds。若只有单 seed，明确标注 pilot。
 
-后续 agent 应先定位实际调用链再编辑；预计至少涉及：
+first-only、non-first-only 和 repeated 是 SFT、Experiment 1、Experiment 2 共用的报告切片，不单列
+第三个实验，不参与 checkpoint 或 reward 选择；support 少于 30 时只作描述统计。
 
-- condition 采样与实验配置加载；
-- checkpoint import/lineage manifest；
-- fresh query manifest 验证与 rebind；
-- SC-IDC value-level joint core 和 reward adapter；
-- conditional SFT、rollout signal gate 与 GRPO runner；
-- 对应 unit/integration tests 和运行记录。
+## 下一步执行顺序
 
-不要直接改写 Phase 1 产物或复用其 config hash 充当 target identity。
+1. 实现并测试 Data-1/Data-2；完成后即可准备 conditional SFT。
+2. 同时实现 Reward-1/Reward-2/Reward-3；先跑便宜的合成反例，再跑 train-graph reference audit。
+3. Data-1/Data-2 通过后运行 specific-relation conditional SFT；不等待 Reward-3 的完整 reference audit。
+4. 冻结 SFT parent；待 Reward-3 全部通过后运行 Experiment 1。
+5. Experiment 1 显示存在可学习信号且成本可接受后，运行单 seed 配对 GRPO pilot。
+6. pilot 稳定后再决定是否投入正式多 seed 训练。
 
-## 不变量与停止条件
+## 不变量
 
-- 原 pattern 复现的配置 hash、checkpoint 和产物不变；
-- 通用 hash/checkpoint verifier 不放宽；
-- 不访问 test split 调参，不把 test conditions 用于 checkpoint 选择；
-- 不覆盖已有 checkpoint、manifest 或运行目录；
-- 任何正式训练都记录精确 Git SHA、命令、seed、输入/输出 hashes 和资源成本；
-- value-level joint core、cross-config lineage、condition manifest、Experiment B、conditional SFT
-  provenance 或 Experiment A 任一硬门槛未通过时，停止在 GRPO 之前。
+- 原 pattern 复现的 config hash、checkpoint 和产物不变；
+- 通用 verifier 不放宽；旧 Phase 1 产物不改写；
+- 不覆盖已有 checkpoints、manifests 或 run directories；
+- 不访问 final evaluation/test 调参；
+- 所有正式训练记录精确 Git SHA、命令、seeds、输入/输出 hashes 和资源成本；
+- entity、all-slot IDC 和 structural controls 不进入本轮模型结论。
