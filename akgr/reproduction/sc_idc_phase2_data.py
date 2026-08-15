@@ -396,8 +396,11 @@ def _load_sampling_inputs(config: ExperimentConfig) -> tuple[dict[str, Any], dic
         if manifest.get(key) != value:
             raise ValueError(f"Sampling manifest {key} mismatch")
     artifacts = manifest["artifacts"]
+    conditional_variant = config.raw["training"]["conditional"]["data_variant"]
     records = {
-        "sft_train": _load_manifest_artifact(path, artifacts["base"]["train"]),
+        "sft_train": _load_manifest_artifact(
+            path, artifacts[conditional_variant]["train"]
+        ),
         "merged_train": _load_manifest_artifact(path, artifacts["merged"]["train"]),
         "validation": _load_manifest_artifact(path, artifacts["base"]["valid"]),
         "final_evaluation": _load_manifest_artifact(path, artifacts["base"]["test"]),
@@ -598,7 +601,7 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
         fresh = [record for record in fresh if _query_signature(record) not in final_queries]
         identities = {}
         for label, records in {
-            "merged_sft_train": sampled["merged_train"],
+            "conditional_sft_train": sampled["sft_train"],
             "validation": sampled["validation"],
             "final_evaluation": sampled["final_evaluation"],
             "fresh": fresh,
@@ -609,10 +612,10 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
                 require_query_and_supervision_unique=(label == "fresh"),
             )
         for left, right in (
-            ("merged_sft_train", "validation"),
-            ("merged_sft_train", "final_evaluation"),
+            ("conditional_sft_train", "validation"),
+            ("conditional_sft_train", "final_evaluation"),
             ("validation", "final_evaluation"),
-            ("fresh", "merged_sft_train"),
+            ("fresh", "conditional_sft_train"),
             ("fresh", "validation"),
             ("fresh", "final_evaluation"),
         ):
