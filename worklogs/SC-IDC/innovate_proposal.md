@@ -322,16 +322,35 @@ SC-IDC 不应完全取代原来的条件遵循指标，而应增加一个更严�
 最小验证不训练，先使用合成对抗集与 fresh RL reference queries 审计机制本身。reference
 queries 的 nominal adherence 天然为 1，因此不能用于模型级 semantic-control 结论。
 
+模型级主实验只选择 `specific_relation`，不要求重新复现其余四种 controls。SC-IDC 的逻辑核心
+仍保持 entity/relation 通用，但训练结论明确限定为 relation control。训练与对照主线为：
+
+```mermaid
+flowchart TD
+    U["冻结的 unconditional SFT parent"] --> S["specific-relation conditional SFT"]
+    S --> A["实验 A：rollout 奖励信息量门控"]
+    A --> B["原始 GRPO baseline"]
+    A --> C["SC-IDC GRPO"]
+```
+
+unconditional parent 只复用权重，不重新训练；specific-relation conditional SFT 使用独立配置、
+config hash 和 checkpoint lineage，并显式记录 imported-parent SHA，不覆盖原复现 checkpoint。
+conditional SFT 完成后冻结为两个 GRPO 分支的共同 parent。
+
 #### 实验 A：奖励信息量
 
-比较原 reward 与加入 SC-IDC 后的：
+在冻结的 specific-relation conditional SFT parent 上生成 rollout，并对同一批 completions 同时
+计算原 reward 与加入 SC-IDC 后的 reward，比较：
 
 - zero-reward-variance group rate；
 - 不同字符串但相同 reward 的比例；
 - unique denotation 数量；
+- nominal relation adherence 和 SC-IDC 可评分率；
 - 每次 rollout 的额外执行成本。
 
-SC-IDC 主要应该减少“不同假设、相同终局集合奖励”的 tie，无法解决四条 completion 完全相同的情况。
+实验 A 只决定奖励是否提供了可学习的额外区分信号，不更新模型。SC-IDC 主要应该减少
+“不同假设、相同终局集合奖励”的 tie，无法解决四条 completion 完全相同的情况；若 nominal
+adherence 或可评分组不足，应先修复 conditional SFT/rollout，而不是直接启动 GRPO。
 
 #### 实验 B：OR-append 对抗集（硬门槛）
 
@@ -363,24 +382,27 @@ entity/relation slots，并在每种条件内赋予 \(1/m\) 权重。硬验收�
 
 #### 实验 C：槽位位置泛化
 
-分别用：
+在 relation slots 内分别用：
 
 - first slot；
 - non-first slot；
 - 全部槽位均匀采样
 
-作为 semantic control，检查原模型是否存在明显 first-slot advantage，以及均匀训练后差距是否缩小。
+作为 semantic control，检查模型是否存在明显 first-slot advantage，以及均匀训练后差距是否缩小。
 
-#### 实验 D：小规模训练
+#### 实验 D：specific-relation GRPO 主对照
 
-在相同 SFT parent 和相同图执行预算下比较：
+实验 A 通过后，从同一个冻结的 specific-relation conditional SFT parent 分叉：
 
-- 原始奖励；
-- 只保证 nominal control；
-- nominal control + controlled-slot IDC；
-- all-slot IDC，作为反例消融。
+- **原始 GRPO baseline**：保持原 Jaccard/Dice/Overlap 与 nominal condition reward；
+- **SC-IDC GRPO**：在完全相同的基础 reward 上加入 controlled-relation SC-IDC 项。
 
-最后一个消融可以验证“全槽位不可替代性”是否确实导致语义或复杂度多样性下降。
+两条分支必须共享 RL-only 数据、prompt/slot 采样、初始化权重、generation 参数、optimizer、seed、
+训练步数和图执行预算，唯一方法差异是 SC-IDC 奖励。比较 nominal adherence、marginal effective、
+matched selectivity、strict effective、laundering、语义质量、parse/EOS 和复杂度分布。
+
+entity control、all-slot IDC 和其他 structural controls 不进入主训练对照；因此模型级结论只覆盖
+specific relation，不能外推成 entity control 已被训练验证。
 
 ---
 
