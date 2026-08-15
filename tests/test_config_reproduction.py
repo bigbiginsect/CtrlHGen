@@ -24,6 +24,9 @@ FULL_TRAIN_AUTHOR_CONFIG_PATH = (
 FULL_TRAIN_AUTHOR_PILOT_PATH = (
     REPO_ROOT / "akgr" / "configs" / "diagnostics" / "wn-pattern-full-train-author-pilot.yml"
 )
+SPECIFIC_RELATION_CONFIG_PATH = (
+    CONFIG_DIR / "wn-specific-relation-full-train-author-aligned.yml"
+)
 RUNTIME_ENV = {
     "CTRLHGEN_DATA_ROOT": "/tmp/ctrlhgen-test/data",
     "CTRLHGEN_CHECKPOINT_ROOT": "/tmp/ctrlhgen-test/checkpoints",
@@ -238,6 +241,23 @@ def test_phase_c_iv_changes_only_train_scale_and_run_budget_from_v3() -> None:
         "min_parse_ok": 0.9,
         "min_eos_rate": 0.98,
     }
+
+
+def test_sc_idc_specific_relation_config_reuses_data_model_and_sft_budget() -> None:
+    source = load_experiment_config(FULL_TRAIN_AUTHOR_CONFIG_PATH, env=RUNTIME_ENV)
+    target = load_experiment_config(SPECIFIC_RELATION_CONFIG_PATH, env=RUNTIME_ENV)
+
+    assert target.experiment["name"] == "sc-idc-wn-specific-relation-full-sft-v1"
+    assert target.condition == "specific_relation"
+    assert target.semantic_hash != source.semantic_hash
+    assert target.data_hash == source.data_hash
+    assert target.kg_hash == source.kg_hash
+    assert target.artifact_dir == source.artifact_dir
+    for section in (
+        "tokenizer", "data", "sampling", "augmentation", "model", "training",
+        "generation", "grpo",
+    ):
+        assert target.raw[section] == source.raw[section]
 
 
 def test_explicit_sft_config_rejects_legacy_mixing_and_invalid_nested_values(tmp_path: Path) -> None:

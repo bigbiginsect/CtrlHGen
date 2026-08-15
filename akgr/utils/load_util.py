@@ -285,6 +285,7 @@ def save_reproduction_checkpoint(
     optimizer=None,
     scheduler=None,
     data_manifest_hash: str | None = None,
+    condition_lineage: dict | None = None,
 ) -> Path:
     """Atomically save a portable Phase A checkpoint directory."""
     target = Path(path).expanduser().resolve()
@@ -321,6 +322,7 @@ def save_reproduction_checkpoint(
             "tokenizer_vocab_hash": _json_sha256(tokenizer.get_vocab()),
             "tokenizer_json_hash": tokenizer_json_hash,
             "tokenizer_contract": contract,
+            "condition_lineage": condition_lineage,
         }
         (temporary / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"

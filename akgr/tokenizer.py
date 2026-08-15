@@ -193,6 +193,56 @@ def condition_value_from_target(condition: str, target: str) -> str:
     raise AssertionError(f"Unhandled normalized condition: {condition}")
 
 
+def unique_condition_values_from_target(condition: str, target: str) -> tuple[str, ...]:
+    """Return prompt-identifiable semantic values in first-occurrence order.
+
+    A specific-relation prompt exposes a relation value, not an AST slot.  The
+    same value appearing more than once therefore occurs exactly once here.
+    Other condition kinds retain their existing single-value contract.
+    """
+    condition = normalize_condition(condition)
+    if condition not in {"specific_relation", "specific_entity"}:
+        return (condition_value_from_target(condition, target),)
+    want_relation = condition == "specific_relation"
+    values = []
+    seen = set()
+    for token in target.split():
+        try:
+            numeric = int(token)
+        except ValueError:
+            continue
+        if (numeric < 0) != want_relation or numeric == 0:
+            continue
+        value = str(numeric)
+        if value not in seen:
+            seen.add(value)
+            values.append(value)
+    if not values:
+        raise ValueError(f"Target has no values for {condition}: {target!r}")
+    return tuple(values)
+
+
+def dynamic_condition_value_from_target(
+    condition: str,
+    target: str,
+    *,
+    seed: int,
+    record_id: str,
+    epoch: int,
+) -> str:
+    """Sample uniformly over unique values without keeping mutable RNG state."""
+    from akgr.reproduction.seed import derive_seed
+
+    condition = normalize_condition(condition)
+    if condition not in {"specific_relation", "specific_entity"}:
+        return condition_value_from_target(condition, target)
+    values = unique_condition_values_from_target(condition, target)
+    rng = random.Random(
+        derive_seed(int(seed), "dynamic-condition", str(record_id), int(epoch), condition)
+    )
+    return values[rng.randrange(len(values))]
+
+
 def build_prompt(
     source: str,
     condition: ConditionSpec | None,
@@ -252,6 +302,9 @@ def prepare_batch(
     is_gen: bool,
     condition: str = "unconditional",
     condition_delimiter: str | None = None,
+    condition_value_by_record_id: dict[str, str] | None = None,
+    condition_seed: int | None = None,
+    condition_epoch: int | None = None,
 ) -> PreparedBatch:
     """Prepare an unconditional or controlled batch through one code path."""
     kind = normalize_condition(condition)
@@ -260,7 +313,41 @@ def prepare_batch(
     pattern_id = sample["pattern_id"]
     conditions = None
     if kind != "unconditional":
-        conditions = [ConditionSpec(kind, condition_value_from_target(kind, value)) for value in target]
+        if condition_value_by_record_id is not None:
+            if condition_seed is not None or condition_epoch is not None:
+                raise ValueError("Frozen and dynamic condition selection are mutually exclusive")
+            if "record_id" not in sample:
+                raise ValueError("Frozen condition selection requires record_id in every sample")
+            record_ids = [str(value) for value in sample["record_id"]]
+            missing = [value for value in record_ids if value not in condition_value_by_record_id]
+            if missing:
+                raise ValueError(f"Frozen condition manifest is missing record IDs: {missing[:3]}")
+            selected_values = [condition_value_by_record_id[value] for value in record_ids]
+        elif condition_seed is not None or condition_epoch is not None:
+            if condition_seed is None or condition_epoch is None:
+                raise ValueError("Dynamic condition selection requires both seed and epoch")
+            if "record_id" not in sample:
+                raise ValueError("Dynamic condition selection requires record_id in every sample")
+            selected_values = [
+                dynamic_condition_value_from_target(
+                    kind,
+                    value,
+                    seed=int(condition_seed),
+                    record_id=str(record_id),
+                    epoch=int(condition_epoch),
+                )
+                for value, record_id in zip(target, sample["record_id"])
+            ]
+        else:
+            selected_values = [condition_value_from_target(kind, value) for value in target]
+        for value, selected in zip(target, selected_values):
+            if kind in {"specific_relation", "specific_entity"} and selected not in set(
+                unique_condition_values_from_target(kind, value)
+            ):
+                raise ValueError(
+                    f"Condition value {selected!r} is not present in target {value!r}"
+                )
+        conditions = [ConditionSpec(kind, value) for value in selected_values]
     prompts = [
         build_prompt(value, spec, tokenizer, condition_delimiter=condition_delimiter)
         for value, spec in zip(source, conditions or [None] * len(source))

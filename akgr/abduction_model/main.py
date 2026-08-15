@@ -838,6 +838,7 @@ def my_parse_args():
     parser.add_argument('--experiment-config')
     parser.add_argument('--stage', choices=['unconditional', 'conditional'])
     parser.add_argument('--parent-checkpoint')
+    parser.add_argument('--phase2-data-manifest')
     parser.add_argument('--resume-checkpoint')
     parser.add_argument('--checkpoint')
     parser.add_argument('--max-steps', type=int, default=-1)
@@ -907,7 +908,7 @@ def main():
     if args.experiment_config:
         strict_flags = {
             '--experiment-config', '--mode', '--stage', '--parent-checkpoint',
-            '--resume-checkpoint', '--checkpoint', '--max-steps', '--greedy',
+            '--phase2-data-manifest', '--resume-checkpoint', '--checkpoint', '--max-steps', '--greedy',
             '--test_split', '--overwrite_batchsize',
         }
         supplied_flags = {

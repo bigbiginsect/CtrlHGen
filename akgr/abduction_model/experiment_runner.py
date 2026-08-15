@@ -37,6 +37,7 @@ from akgr.kgdata import load_kg
 from akgr.reproduction.config import load_experiment_config
 from akgr.reproduction.contracts import ConditionSpec
 from akgr.reproduction.seed import derive_seed, make_generator, seed_everything
+from akgr.reproduction.sc_idc_phase2_data import verify_sft_preflight
 from akgr.tokenizer import (
     build_generation_prompt,
     condition_value_from_target,
@@ -151,7 +152,7 @@ def _require_phase_d_parent_checkpoint(path) -> Path:
 
 def _evaluation_records(
     *, config, dataloader, model, tokenizer, graph_samplers, device, split, condition_kind,
-    do_sample: bool,
+    do_sample: bool, condition_value_by_record_id=None,
 ):
     model.eval()
     generation = config.raw["generation"]
@@ -163,6 +164,7 @@ def _evaluation_records(
                 device, sample, tokenizer, True, _prompt_length(config),
                 generation["max_new_tokens"], True, condition_kind,
                 condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
+                condition_value_by_record_id=condition_value_by_record_id,
             )
             generation_kwargs = {
                 "max_new_tokens": int(generation["max_new_tokens"]),
@@ -208,7 +210,11 @@ def _evaluation_records(
                     if eos_emitted else len(token_ids)
                 )
                 records.append(build_evaluation_record(
-                    record_id=f"{split}:{record_index}", observation=source,
+                    record_id=(
+                        str(sample["record_id"][offset])
+                        if condition_value_by_record_id is not None
+                        else f"{split}:{record_index}"
+                    ), observation=source,
                     reference=target, prediction=prediction, scores=score, condition=spec,
                     eos_emitted=eos_emitted,
                     generated_token_count=generated_token_count,
@@ -256,7 +262,7 @@ def _write_validation_artifacts(output_root: Path, *, stage: str, stage_epoch: i
     )
 
 
-def _model_and_tokenizer(config, nentity, nrelation, args, stage):
+def _model_and_tokenizer(config, nentity, nrelation, args, stage, phase2_context=None):
     if args.resume_checkpoint:
         loaded = load_reproduction_checkpoint(
             args.resume_checkpoint,
@@ -270,15 +276,28 @@ def _model_and_tokenizer(config, nentity, nrelation, args, stage):
     if args.parent_checkpoint:
         if stage != "conditional":
             raise ValueError("--parent-checkpoint is only valid for conditional SFT or GRPO")
-        _require_selected_healthy_checkpoint(args.parent_checkpoint, stage="unconditional")
-        loaded = load_reproduction_checkpoint(
-            args.parent_checkpoint,
-            mode="parent",
-            expected_stage="unconditional",
-            expected_condition="unconditional",
-            expected_config_hash=config.semantic_hash,
-            expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
-        )
+        if phase2_context is None:
+            _require_selected_healthy_checkpoint(args.parent_checkpoint, stage="unconditional")
+            loaded = load_reproduction_checkpoint(
+                args.parent_checkpoint,
+                mode="parent",
+                expected_stage="unconditional",
+                expected_condition="unconditional",
+                expected_config_hash=config.semantic_hash,
+                expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
+            )
+        else:
+            parent_payload = phase2_context["parent_payload"]
+            loaded = load_reproduction_checkpoint(
+                args.parent_checkpoint,
+                mode="parent",
+                expected_stage="unconditional",
+                expected_condition="unconditional",
+                expected_config_hash=parent_payload["source"]["config_semantic_hash"],
+                expected_data_manifest_hash=parent_payload["source"][
+                    "sampling_manifest_sha256"
+                ],
+            )
         return loaded.model, loaded.tokenizer, loaded
     tokenizer = _new_tokenizer(nentity, nrelation)
     return create_reproduction_transformer(tokenizer, config.raw["model"]), tokenizer, None
@@ -292,6 +311,42 @@ def run_sft(config, args) -> Path:
     if args.stage == "conditional" and not (args.parent_checkpoint or args.resume_checkpoint):
         raise ValueError("Conditional SFT requires --parent-checkpoint or --resume-checkpoint")
 
+    phase2_context = None
+    if config.condition == "specific_relation":
+        if args.stage != "conditional":
+            raise ValueError("The SC-IDC specific-relation config is conditional-SFT only")
+        if not args.phase2_data_manifest:
+            raise ValueError(
+                "SC-IDC specific-relation SFT requires --phase2-data-manifest"
+            )
+        summary_path = Path(args.phase2_data_manifest).expanduser().resolve()
+        preliminary = json.loads(summary_path.read_text(encoding="utf-8"))
+        parent_import_path = (
+            summary_path.parent / preliminary["parent_import"]["path"]
+        ).resolve()
+        parent_payload = json.loads(parent_import_path.read_text(encoding="utf-8"))
+        frozen_parent = Path(parent_payload["checkpoint"]["path"]).expanduser().resolve()
+        if args.parent_checkpoint and Path(args.parent_checkpoint).expanduser().resolve() != frozen_parent:
+            raise ValueError("--parent-checkpoint differs from the Phase 2 frozen parent")
+        summary, validation_conditions, condition_lineage, validation_contracts = (
+            verify_sft_preflight(
+                summary_path,
+                target_config=config,
+                checkpoint=frozen_parent,
+            )
+        )
+        phase2_context = {
+            "summary": summary,
+            "parent_payload": parent_payload,
+            "validation_conditions": validation_conditions,
+            "validation_contracts": validation_contracts,
+            "condition_lineage": condition_lineage,
+        }
+    elif args.phase2_data_manifest:
+        raise ValueError(
+            "--phase2-data-manifest is only valid for the specific_relation Phase 2 config"
+        )
+
     stage_config = config.raw["training"][args.stage]
     dataset_dict, nentity, nrelation = _datasets(
         config, ["train", "valid"], train_variant=stage_config["data_variant"]
@@ -302,7 +357,20 @@ def run_sft(config, args) -> Path:
     validation_loader = _loader(
         dataset_dict["valid"], validation_config["batch_size"], config.seed, False
     )
-    model, tokenizer, loaded = _model_and_tokenizer(config, nentity, nrelation, args, args.stage)
+    if phase2_context is not None:
+        dataset_ids = {str(value) for value in dataset_dict["valid"]["record_id"]}
+        manifest_ids = set(phase2_context["validation_conditions"])
+        if dataset_ids != manifest_ids:
+            raise ValueError("Frozen validation condition record IDs do not match validation data")
+        for example in dataset_dict["valid"]:
+            record_id = str(example["record_id"])
+            contract = phase2_context["validation_contracts"][record_id]
+            target_hash = hashlib.sha256(example["target"].encode("utf-8")).hexdigest()
+            if target_hash != contract["target_sha256"]:
+                raise ValueError(f"Frozen validation target hash mismatch for {record_id}")
+    model, tokenizer, loaded = _model_and_tokenizer(
+        config, nentity, nrelation, args, args.stage, phase2_context=phase2_context
+    )
     device = _require_cuda("SFT")
     model.to(device)
     graph_samplers = _graph_samplers(config)
@@ -340,20 +408,13 @@ def run_sft(config, args) -> Path:
             restore_rng=True,
         )
         start_epoch = int(loaded.metadata["stage_epoch"])
+        if phase2_context is not None and loaded.metadata.get("condition_lineage") != phase2_context[
+            "condition_lineage"
+        ]:
+            raise ValueError("Resume checkpoint Phase 2 condition lineage mismatch")
 
     condition = "unconditional" if args.stage == "unconditional" else config.condition
     global_step = inherited_global_step
-    prepare = partial(
-        prepare_batch,
-        device,
-        tokenizer=tokenizer,
-        is_gpt=True,
-        src_len=_prompt_length(config),
-        tgt_len=config.raw["generation"]["max_new_tokens"],
-        is_gen=False,
-        condition=condition,
-        condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
-    )
     final_epoch = int(stage_config["epochs"])
     if start_epoch >= final_epoch:
         raise ValueError(f"Checkpoint already reached configured {args.stage} epochs")
@@ -375,10 +436,23 @@ def run_sft(config, args) -> Path:
             derive_seed(config.seed, args.stage, stage_epoch),
             True,
         )
+        train_prepare = partial(
+            prepare_batch,
+            device,
+            tokenizer=tokenizer,
+            is_gpt=True,
+            src_len=_prompt_length(config),
+            tgt_len=config.raw["generation"]["max_new_tokens"],
+            is_gen=False,
+            condition=condition,
+            condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
+            condition_seed=(config.seed if phase2_context is not None else None),
+            condition_epoch=(stage_epoch if phase2_context is not None else None),
+        )
         train_loss, steps = sft_train_epoch(
             model=model,
             dataloader=epoch_loader,
-            prepare=prepare,
+            prepare=train_prepare,
             optimizer=schedule.optimizer,
             scheduler=schedule.scheduler,
             gradient_accumulation_steps=config.raw["training"]["gradient_accumulation_steps"],
@@ -415,6 +489,11 @@ def run_sft(config, args) -> Path:
                 is_gen=False,
                 condition=condition,
                 condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
+                condition_value_by_record_id=(
+                    phase2_context["validation_conditions"]
+                    if phase2_context is not None
+                    else None
+                ),
             )
             validation_loss = sft_validation_loss(
                 model=model, dataloader=validation_loader, prepare=validation_prepare
@@ -429,6 +508,11 @@ def run_sft(config, args) -> Path:
                 split="valid",
                 condition_kind=condition,
                 do_sample=False,
+                condition_value_by_record_id=(
+                    phase2_context["validation_conditions"]
+                    if phase2_context is not None
+                    else None
+                ),
             )
             validation_record = {
                 "stage": args.stage,
@@ -475,6 +559,11 @@ def run_sft(config, args) -> Path:
                 optimizer=schedule.optimizer,
                 scheduler=schedule.scheduler,
                 data_manifest_hash=data_manifest_hash,
+                condition_lineage=(
+                    phase2_context["condition_lineage"]
+                    if phase2_context is not None
+                    else None
+                ),
             )
             history_record["checkpoint"] = output.name
         if improved:
