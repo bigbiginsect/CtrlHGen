@@ -4,7 +4,7 @@
 
 ### 1. 核心动机
 
-CtrlHGen 当前将“满足控制条件”主要定义为：
+SC-IDC 针对的基线将“满足控制条件”主要定义为：
 
 - 生成指定的逻辑结构或元素数量；
 - 指定实体/关系 token 出现在假设中。
@@ -59,7 +59,8 @@ SC-IDC 希望把语义控制从：
 
 ### 3. 槽位对称的控制条件采样
 
-论文描述的是从目标假设中随机采样一个实体或关系，但当前实现固定选择序列中的第一个合法元素。这会造成明显的位置捷径。
+论文描述的是从目标假设中随机采样一个实体或关系；若实现固定选择序列中的第一个合法元素，
+会造成明显的位置捷径。
 
 调整后，对于目标假设 \(H^\star\) 的所有 eligible slots：
 
@@ -79,62 +80,81 @@ z_C\sim\mathrm{Uniform}(Z(H^\star)).
 
 ---
 
-### 4. 受控槽位的匹配反事实干预
+### 4. 受控槽位的边际门控与匹配反事实
 
-设生成假设为 \(H\)，用户控制条件对应槽位为 \(z_C\)。从匹配分布中选择替代值：
+#### 4.1 matched replacement 不能单独识别装饰分支
+
+原始设想只比较受控值和匹配替代值，但存在如下反例：
 
 \[
-z_C'\sim q_{\mathrm{match}}(z'\mid z_C,H,G).
+H=H_0\lor B_C,\qquad [B_C]_G\subseteq[H_0]_G.
 \]
 
-干预应尽量只改变语义选择，而不改变结构难度。
-
-对于 relation，匹配：
-
-- 关系方向；
-- domain/range；
-- 局部度数或答案集基数区间；
-- 在逻辑树中的位置。
-
-对于 entity，匹配：
-
-- KG 类型；
-- anchor/中间节点等逻辑角色；
-- 邻域度数；
-- 相关关系签名。
-
-构造反事实假设：
+此时包含 \(C\) 的分支对当前结论没有边际贡献，属于本方案希望识别的 control laundering。
+然而，若某个匹配替代 \(C'\) 使 \(B_{C'}\) 引入额外假阳性，仍可能出现：
 
 \[
+R_{\mathrm{sem}}(H)-R_{\mathrm{sem}}(H_{C'})>0.
+\]
+
+正的 matched delta 因此只能说明“当前值优于这个替代值”，不能证明当前值所在分支不是
+装饰。因此 SC-IDC 增加独立的逻辑分支边际门控。
+
+#### 4.2 最近逻辑分支的中性化边际
+
+对于受控 slot，沿逻辑树向上寻找最近的 intersection/union 分支祖先，并用对应的逻辑恒等元
+替代包含该 slot 的直接子分支：
+
+- intersection 的恒等元为全集；
+- union 的恒等元为空集；
+- 若不存在分支祖先，则用空根查询表示移除唯一解释链。
+
+记所得内部审计查询为 \(H^{(-B_C)}\)，定义：
+
+\[
+\Delta_C^{\mathrm{marg}}
+=
+R_{\mathrm{sem}}(H)-R_{\mathrm{sem}}(H^{(-B_C)}).
+\]
+
+这一量衡量最近逻辑分支的边际贡献，不应被表述成严格的单 predicate 因果效应。
+
+#### 4.3 受控值的匹配替代优势
+
+从匹配分布中选择替代值：
+
+\[
+z_C'\sim q_{\mathrm{match}}(z'\mid z_C,H,G),
+\qquad
 H^{(C')}=\operatorname{do}(H,z_C\leftarrow z_C').
 \]
 
-它与原假设保持相同的：
+在 WN18RR 上不虚构不存在的显式类型信息，而使用 observable graph 可推导的代理：
 
-- logic pattern；
-- entity/relation 数量；
-- 变量绑定；
-- 自由变量接口；
-- 序列长度大致范围。
+- relation：正/反方向、边频率区间、头尾实体的有向关系签名、反事实答案基数区间；
+- entity：anchor 角色、相邻 projection 可达性、节点度数区间、有向 incident-relation 签名。
 
-这比直接删除一个 projection 或 relation 更干净，因为删除可能改变查询层级、复杂度和答案基数分布。
+具体候选流程固定为：entity 先按派生 seed 确定性预筛最多 256 个，再按图特征保留 16 个；
+entity/relation 都从综合排序最优的 8 个中按派生 seed 无放回采样 3 个。候选不足时按固定层级
+放宽并记录 fallback，且始终排除原 token。
+
+替换只改变目标 slot，保持 AST、logic pattern 和 entity/relation 数量不变。matched
+intervention 用于衡量受控值的选择性，不再单独承担“非装饰性”判定。
 
 ---
 
-### 5. SC-IDC 奖励
+### 5. SC-IDC 双量审计与候选奖励
 
 首先定义基础语义质量：
 
 \[
-R_{\mathrm{sem}}(H)=S([H]_G,O),
+R_{\mathrm{sem}}(H)=S([H]_G,O).
 \]
 
-其中 \(S\) 可以先使用 Jaccard，或其他经过校准的 precision–recall 指标。
-
-controlled slot 的有益反事实贡献为：
+离线核心固定 \(S\) 为 Jaccard。受控 slot 的匹配替代优势为：
 
 \[
-\Delta_C(H)
+\Delta_C^{\mathrm{match}}(H)
 =
 R_{\mathrm{sem}}(H)
 -
@@ -142,7 +162,29 @@ R_{\mathrm{sem}}(H)
 R_{\mathrm{sem}}(H^{(C')}).
 \]
 
-定义有效控制奖励：
+SC-IDC 同时保留两个判据：
+
+\[
+\mathrm{marginal\_effective}
+=
+\mathbf 1[\Delta_C^{\mathrm{marg}}>\epsilon],
+\qquad
+\mathrm{matched\_selective}
+=
+\mathbf 1[\Delta_C^{\mathrm{match}}>\epsilon].
+\]
+
+据此区分：
+
+- `laundered`：nominal 为 1，但 branch marginal 不为正；
+- `marginal_only`：branch marginal 为正，但未识别出正的 matched advantage；
+- `strict_effective`：两者均为正；
+- `unscorable`：没有合法替代候选。
+
+确定性图执行的主判定固定为 \(\epsilon=0\)，同时报告 \(\epsilon=0.01/0.05\) 的敏感性；归一化
+诊断分数固定使用 \(\tau=0.1\)。
+
+后续若进入训练，可审计如下候选奖励：
 
 \[
 R_{\mathrm{eff}}(H,C)
@@ -151,38 +193,19 @@ R_{\mathrm{eff}}(H,C)
 w(R_{\mathrm{sem}}(H))\,
 \operatorname{clip}
 \left(
-\frac{\Delta_C(H)-\epsilon}{\tau},
+\frac{\Delta_C^{\mathrm{marg}}(H)-\epsilon}{\tau_{\mathrm{marg}}},
+0,1
+\right)
+\operatorname{clip}
+\left(
+\frac{\Delta_C^{\mathrm{match}}(H)-\epsilon}{\tau_{\mathrm{match}}},
 0,1
 \right).
 \]
 
-其中：
-
-- \(\mathbf 1[C\in H]\) 保证 nominal adherence；
-- \(\Delta_C>0\) 表明原控制条件优于匹配替代项；
-- \(w(R_{\mathrm{sem}})\) 防止整体质量很差的假设仅凭局部差异获得高控制奖励；
-- \(\epsilon\) 排除图执行噪声和极小变化；
-- \(\tau\) 用于归一化和截断。
-
-例如可以取：
-
-\[
-w(R_{\mathrm{sem}})=R_{\mathrm{sem}},
-\]
-
-最终奖励为：
-
-\[
-\boxed{
-R(H,O,C)
-=
-R_{\mathrm{sem}}(H)
-+
-\beta R_{\mathrm{eff}}(H,C)
-}
-\]
-
-这里不再对所有槽位求和。
+仍可取 \(w(R_{\mathrm{sem}})=R_{\mathrm{sem}}\)，并将其作为语义奖励的受控槽位附加项。
+这里不对所有槽位求和。离线审计只输出原始 delta、阈值敏感性和候选诊断分数，不直接定义
+GRPO 训练权重。
 
 ---
 
@@ -237,7 +260,7 @@ R_{\mathrm{harm}}
 
 ---
 
-### 7. Nominal 与 Effective adherence 分开评估
+### 7. Nominal、Marginal 与 Strict Effective 分开评估
 
 SC-IDC 不应完全取代原来的条件遵循指标，而应增加一个更严格的维度。
 
@@ -251,33 +274,53 @@ SC-IDC 不应完全取代原来的条件遵循指标，而应增加一个更严�
 \Pr(C\text{ 出现在合法位置}).
 \]
 
-2. **Effective Adherence**
+2. **Marginal Effective Adherence**
 
 \[
 \mathrm{Acc}_{\mathrm{eff}}
 =
-\Pr(\Delta_C>\epsilon).
+\Pr(\Delta_C^{\mathrm{marg}}>\epsilon).
 \]
 
-3. **Control Laundering Rate**
+3. **Matched Selectivity**
+
+\[
+\mathrm{Acc}_{\mathrm{match}}
+=
+\Pr(\Delta_C^{\mathrm{match}}>\epsilon).
+\]
+
+4. **Strict Effective Adherence**
+
+\[
+\Pr(
+\Delta_C^{\mathrm{marg}}>\epsilon
+\land
+\Delta_C^{\mathrm{match}}>\epsilon
+).
+\]
+
+5. **Control Laundering Rate**
 
 \[
 \Pr(
 \mathrm{nominal}=1
 \land
-\Delta_C\le\epsilon
+\Delta_C^{\mathrm{marg}}\le\epsilon
 ).
 \]
 
-第三项专门衡量“条件虽然出现，却没有实际作用”的比例。
+第五项专门衡量“条件虽然出现，但其最近逻辑分支对当前解释没有正边际”的比例。
 
-需要明确：\(\Delta_C=0\) 不代表假设错误。它只表示条件在当前 KG 上缺乏可识别的额外外延贡献。因此 nominal 和 effective 两种指标不能互相替代。
+需要明确：任一 delta 为 0 都不代表假设错误。它只表示相应贡献在当前 KG 和干预定义下不可
+识别。因此 nominal、marginal 和 matched 三种指标不能互相替代。
 
 ---
 
 ### 8. 最小验证实验
 
-第一步可以不训练，直接在现有 rollout 上离线审计。
+最小验证不训练，先使用合成对抗集与 fresh RL reference queries 审计机制本身。reference
+queries 的 nominal adherence 天然为 1，因此不能用于模型级 semantic-control 结论。
 
 #### 实验 A：奖励信息量
 
@@ -290,7 +333,7 @@ SC-IDC 不应完全取代原来的条件遵循指标，而应增加一个更严�
 
 SC-IDC 主要应该减少“不同假设、相同终局集合奖励”的 tie，无法解决四条 completion 完全相同的情况。
 
-#### 实验 B：OR-append 对抗集
+#### 实验 B：OR-append 对抗集（硬门槛）
 
 从一个已经很好解释 \(O\) 的假设开始，添加一个包含指定条件 \(C\)、但被其他 OR 分支完全遮蔽的分支。
 
@@ -298,10 +341,25 @@ SC-IDC 主要应该减少“不同假设、相同终局集合奖励”的 tie，
 
 - nominal adherence 仍为 1；
 - 原 condition reward 仍为 1；
-- \(\Delta_C\approx0\)；
+- matched delta 可能为 0，也可能因替代项引入假阳性而大于 0；
+- \(\Delta_C^{\mathrm{marg}}=0\)；
 - effective adherence 判为失败。
 
-如果 SC-IDC 无法识别这类案例，方案的核心动机就不成立。
+如果边际门控无法识别这类案例，方案的核心动机就不成立。该实验必须显式包含“matched
+delta 为正但分支仍冗余”的反例，防止实现退回 matched-only 判定。
+
+#### 实验 B2：真实 KG reference 审计
+
+在 train graph 的 fresh RL-only reference queries 上，按 pattern 分层抽样，同时枚举所有
+entity/relation slots，并在每种条件内赋予 \(1/m\) 权重。硬验收只检查：
+
+- 新旧执行器等价；
+- reference denotation 与 observation 完全一致；
+- matched replacement 保持结构和槽位数；
+- slot 权重契约和确定性产物成立；
+- fallback 后不存在完全不可评分的 slot。
+
+真实 effective/laundering 比例只作诊断，不预设“必须有利”的结果门槛。
 
 #### 实验 C：槽位位置泛化
 
@@ -328,8 +386,9 @@ SC-IDC 主要应该减少“不同假设、相同终局集合奖励”的 tie，
 
 ### 9. 主要风险
 
-- 匹配替代分布若不合理，\(\Delta_C\) 可能只反映 degree 或稀有度差异。
-- 同义或外延等价关系可能让一个合理控制条件得到 \(\Delta_C\approx0\)。
+- 匹配替代分布若不合理，\(\Delta_C^{\mathrm{match}}\) 可能只反映 degree 或稀有度差异。
+- branch marginal 归因于最近逻辑分支，不等同于严格的单 predicate 因果贡献。
+- 同义或外延等价关系可能让一个合理控制条件得到 \(\Delta_C^{\mathrm{match}}\approx0\)。
 - 当前有限 KG 上的冗余不代表完整图上的冗余。
 - 多次反事实执行会增加训练成本，需要缓存或限制替代样本数。
 - effective control 是比论文 lexical control 更强的任务定义，因此必须同时报告 nominal adherence，不能悄悄替换原评价口径。
@@ -341,4 +400,6 @@ SC-IDC 的核心不是追求一个“逐 predicate 最小”的假设，而是�
 
 > 保留合理的逻辑冗余，但要求用户明确指定的语义条件不仅出现在假设中，而且对该假设解释观测的方式产生可验证的实际影响。
 
-这比原始二元 condition reward 更接近“有效可控”，同时不会把整个 abductive objective 偷换成过强的逻辑最小化目标。
+SC-IDC 把“原分支是否有正边际”和“当前受控值是否优于匹配替代”分开报告。只有两者同时
+成立时才称为 strict effective；这比原始二元 condition reward 更接近“有效可控”，同时避免
+matched-only 反例，也不会把整个 abductive objective 偷换成过强的逻辑最小化目标。
