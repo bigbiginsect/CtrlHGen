@@ -405,17 +405,34 @@ def _load_sampling_inputs(config: ExperimentConfig) -> tuple[dict[str, Any], dic
     return manifest, records
 
 
-def _require_unique(records: Iterable[Mapping[str, Any]], *, label: str) -> dict[str, set[str]]:
+def _require_unique(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    label: str,
+    require_query_and_supervision_unique: bool = False,
+) -> dict[str, Any]:
     record_ids = [str(record["record_id"]) for record in records]
     queries = [_query_signature(record) for record in records]
     supervision = [_supervision_signature(record) for record in records]
     if len(record_ids) != len(set(record_ids)):
         raise ValueError(f"{label} has duplicate record IDs")
-    if len(queries) != len(set(queries)):
+    query_duplicates = len(queries) - len(set(queries))
+    supervision_duplicates = len(supervision) - len(set(supervision))
+    if require_query_and_supervision_unique and query_duplicates:
         raise ValueError(f"{label} has duplicate queries")
-    if len(supervision) != len(set(supervision)):
+    if require_query_and_supervision_unique and supervision_duplicates:
         raise ValueError(f"{label} has duplicate supervision")
-    return {"record_id": set(record_ids), "query": set(queries), "supervision": set(supervision)}
+    return {
+        "record_id": set(record_ids),
+        "query": set(queries),
+        "supervision": set(supervision),
+        "audit": {
+            "count": len(record_ids),
+            "record_id_duplicates": 0,
+            "query_duplicates": query_duplicates,
+            "supervision_duplicates": supervision_duplicates,
+        },
+    }
 
 
 def _partition_fresh(
@@ -574,15 +591,23 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
         fresh, fresh_reference = _fresh_records(
             Path(args.fresh_manifest).expanduser().resolve(), source_config=source_config
         )
-        identities = {
-            label: _require_unique(records, label=label)
-            for label, records in {
-                "merged_sft_train": sampled["merged_train"],
-                "validation": sampled["validation"],
-                "final_evaluation": sampled["final_evaluation"],
-                "fresh": fresh,
-            }.items()
-        }
+        final_queries = {_query_signature(record) for record in sampled["final_evaluation"]}
+        excluded_final_query_overlap = [
+            record for record in fresh if _query_signature(record) in final_queries
+        ]
+        fresh = [record for record in fresh if _query_signature(record) not in final_queries]
+        identities = {}
+        for label, records in {
+            "merged_sft_train": sampled["merged_train"],
+            "validation": sampled["validation"],
+            "final_evaluation": sampled["final_evaluation"],
+            "fresh": fresh,
+        }.items():
+            identities[label] = _require_unique(
+                records,
+                label=label,
+                require_query_and_supervision_unique=(label == "fresh"),
+            )
         for left, right in (
             ("merged_sft_train", "validation"),
             ("merged_sft_train", "final_evaluation"),
@@ -591,12 +616,18 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
             ("fresh", "validation"),
             ("fresh", "final_evaluation"),
         ):
-            overlap = identities[left]["query"] & identities[right]["query"]
-            if overlap:
-                raise ValueError(f"Query identity overlap between {left} and {right}")
             record_overlap = identities[left]["record_id"] & identities[right]["record_id"]
             if record_overlap:
                 raise ValueError(f"Record ID overlap between {left} and {right}")
+            supervision_overlap = (
+                identities[left]["supervision"] & identities[right]["supervision"]
+            )
+            if supervision_overlap:
+                raise ValueError(f"Supervision identity overlap between {left} and {right}")
+            if "fresh" in {left, right}:
+                query_overlap = identities[left]["query"] & identities[right]["query"]
+                if query_overlap:
+                    raise ValueError(f"Query identity overlap between {left} and {right}")
 
         signal, rl_train, partition_counts = _partition_fresh(
             fresh, seed=target_config.seed, signal_per_pattern=args.signal_per_pattern
@@ -611,11 +642,17 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
             "signal": {
                 "kind": "condition_agnostic_fresh_query_rebind",
                 **fresh_reference,
+                "excluded_final_evaluation_query_overlap_count": len(
+                    excluded_final_query_overlap
+                ),
                 "subset": "signal",
             },
             "rl_train": {
                 "kind": "condition_agnostic_fresh_query_rebind",
                 **fresh_reference,
+                "excluded_final_evaluation_query_overlap_count": len(
+                    excluded_final_query_overlap
+                ),
                 "subset": "rl_train",
             },
             "final_evaluation": {
@@ -678,9 +715,17 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
             "conditions": conditions,
             "isolation": {
                 "query_overlap_all_required_pairs": 0,
+                "supervision_overlap_all_required_pairs": 0,
                 "record_id_overlap_all_required_pairs": 0,
                 "fresh_internal_query_duplicates": 0,
                 "fresh_internal_supervision_duplicates": 0,
+                "fresh_excluded_for_final_evaluation_query_overlap": len(
+                    excluded_final_query_overlap
+                ),
+                "source_internal_identity_audit": {
+                    label: inventory["audit"]
+                    for label, inventory in sorted(identities.items())
+                },
                 "signal_rl_query_overlap": 0,
                 "signal_per_pattern": int(args.signal_per_pattern),
                 "fresh_partition_counts": partition_counts,

@@ -15,6 +15,7 @@ pytest.importorskip("tokenizers")
 
 from akgr.reproduction.sc_idc_phase2_data import (
     _condition_manifest,
+    _require_unique,
     build_condition_rows,
     create_parent_import_contract,
     load_frozen_condition_manifest,
@@ -122,6 +123,21 @@ def test_paired_grpo_requires_identical_rl_manifest_hash():
     second["conditions"]["rl_train"]["manifest_sha256"] = "different"
     with pytest.raises(ValueError, match="must share"):
         require_shared_rl_manifest_hash(first, second)
+
+
+def test_source_split_duplicates_are_audited_while_fresh_duplicates_fail():
+    record = {
+        "record_id": "a", "answers": [1], "query": ["q"], "pattern_str": "p"
+    }
+    duplicate = dict(record, record_id="b")
+    inventory = _require_unique([record, duplicate], label="source")
+    assert inventory["audit"]["query_duplicates"] == 1
+    assert inventory["audit"]["supervision_duplicates"] == 1
+    with pytest.raises(ValueError, match="duplicate queries"):
+        _require_unique(
+            [record, duplicate], label="fresh",
+            require_query_and_supervision_unique=True,
+        )
 
 
 def _synthetic_config(
