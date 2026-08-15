@@ -376,23 +376,37 @@ nominal、branch support、matched selectivity 和 slot necessity 是不同层�
 
 ---
 
-### 8. 最小验证实验
-
-最小验证不训练，先使用合成对抗集与 fresh RL reference queries 审计机制本身。reference
-queries 的 nominal adherence 天然为 1，因此不能用于模型级 semantic-control 结论。
+### 8. 验证与正式实验流程
 
 模型级主实验只选择 `specific_relation`，不要求重新复现其余四种 controls。SC-IDC 的逻辑核心
-仍保持 entity/relation 通用，但训练结论明确限定为 relation control。训练与对照主线为：
+仍保持 entity/relation 通用，但训练结论明确限定为 relation control。
+
+实验字母表示功能，不表示执行先后：B 验证机制，A 验证奖励信号，C 做位置拓扑诊断，D 才是
+正式配对 GRPO。实际执行顺序固定如下：
 
 ```mermaid
 flowchart TD
-    U["冻结的 unconditional SFT parent"] --> S["specific-relation conditional SFT"]
-    S --> A["实验 A：rollout 奖励信息量门控"]
-    A --> B["uniform-value control + original-reward GRPO"]
-    A --> C["SC-IDC GRPO"]
+    E["Phase 2 工程契约就绪"] --> B["实验 B：机制预检硬门禁"]
+    B --> S["specific-relation conditional SFT"]
+    S --> AC["实验 A + C-pre：奖励信号门禁与位置诊断"]
+    AC -->|"A 通过"| D["实验 D：配对 GRPO"]
+    AC -->|"A 失败"| X["停止并修复，不启动 GRPO"]
+    D --> CP["C-post：冻结分层上的结果分析"]
 ```
 
-#### Phase 2 启动前的身份与数据契约
+| 顺序 | 工作 | 性质 | 是否阻断正式 GRPO |
+|---:|---|---|---|
+| 0 | Phase 2 身份、数据与 reward 契约 | 工程硬门禁 | 是 |
+| 1 | 实验 B（B0/B1/B2） | 机制硬门禁，不训练模型 | 是 |
+| 2 | specific-relation conditional SFT | 生成两个 GRPO 的共同 parent | 是 |
+| 3 | 实验 A + C-pre | A 是信号硬门禁；C-pre 是同批 rollout 的分层诊断 | A 阻断；C-pre 限定结论范围 |
+| 4 | 实验 D | 正式配对 GRPO | — |
+| 5 | C-post | 对 D 的两分支做冻结分层分析 | 不反向调参 |
+
+因此，A、B、C 都保留：B 必须先于 SFT，A 必须先于 D；C 不单独训练第三个模型，而是复用
+A 的 rollout 做 C-pre、复用 D 的评测输出做 C-post。
+
+#### 第 0 步——Phase 2 身份、数据与 reward 契约
 
 不得通过放宽通用 hash 校验来复用旧资产，而应新增两个显式、可审计的导入契约：
 
@@ -411,10 +425,77 @@ flowchart TD
 specific-relation conditional SFT 使用独立 config hash 和 checkpoint lineage，不覆盖原复现
 checkpoint。train condition 按 epoch 从 unique relation values 动态派生；validation、test、
 rollout signal 与 RL train conditions 固定并 hash 化。test condition manifest 由隔离的
-split-preparation 步骤生成并封存，训练、signal gate 和 checkpoint 选择均不得加载。conditional
-SFT 完成后冻结为两个 GRPO 分支的共同 parent。
+split-preparation 步骤生成并封存，训练、signal gate 和 checkpoint 选择均不得加载。
 
-#### 实验 A：奖励信息量
+#### 第 1 步——实验 B：机制预检硬门禁
+
+实验 B 在最终的 value-level joint core 上运行，不依赖模型 checkpoint，也不启动训练。其他 schema
+下的 occurrence-level 审计不能替代本门禁。
+
+##### B0：OR-append laundering 对抗集
+
+从一个已经很好解释 \(O\) 的假设开始，添加一个包含指定条件 \(C\)、但被其他 OR 分支完全遮蔽
+的分支。预期：
+
+- nominal adherence 仍为 1；
+- 原 condition reward 仍为 1；
+- matched delta 可能为 0，也可能因替代项引入假阳性而大于 0；
+- \(\Delta_C^{\mathrm{marg}}=0\)；
+- 判为 `branch_nonmarginal`，并在这个有标签对抗集上计为 laundering detection 成功。
+
+必须同时覆盖单 occurrence 与重复 \(C\) occurrences 的联合干预。如果边际门控无法识别这类
+案例，或者实现退回 matched-only/逐 occurrence 奖励，实验 B 失败。
+
+##### B1：嵌套 predicate 冗余反例
+
+显式构造：
+
+\[
+H=(A\land C)\lor D,
+\qquad
+[A\land C]_G=[A]_G,
+\]
+
+并令 \(A\land C\) 整体分支对观测必不可少、某个 \(C'\) 替换会降低语义质量。预期 branch
+marginal 与 matched delta 均为正，分类只能是 `branch_supported_selective`；测试必须同时断言
+系统没有输出 slot necessity 或 predicate-causal claim。
+
+##### B2：真实 KG reference 与兼容性审计
+
+B2 同时保留两个视图：
+
+- legacy compatibility view：复跑 Phase 1 的 occurrence-level executor parity、结构保持和历史
+  fixture，保证旧入口与旧产物契约没有被破坏；
+- Phase 2 value view：在 train graph 的 fresh RL-only reference queries 上枚举 unique relation
+  values，以 \(1/|V_R(H)|\) 加权，并审计全部同值 occurrences 的联合替换与联合分支中性化。
+
+硬验收包括：
+
+- 13 种 pattern 的正常查询执行器等价率 100%；
+- reference denotation 与 observation 完全一致；
+- joint replacement 保持 AST、pattern、relation/entity 数量和被替换位置数量；
+- unique-value 权重和、候选数、fallback、root marker 与 ancestor-most antichain 契约正确；
+- 固定 seed 的确定性产物逐字节一致；
+- fallback 后不存在不可评分的 reference relation value；
+- 不访问 test split。
+
+reference 的 branch-supported selectivity 与 branch-nonmarginal 比例只作诊断，不设有利阈值，
+也不把自然 branch-nonmarginal 命名为 laundering。B0、B1、B2 任一失败都禁止进入 SFT。
+
+#### 第 2 步——specific-relation conditional SFT
+
+从通过 `import-unconditional-parent` 契约导入的冻结 unconditional 权重开始，使用动态
+uniform unique-value train sampler 与固定 validation condition manifest。训练成功必须满足：
+
+- source/target config、parent checkpoint、tokenizer、data/KG 与 condition lineage 完整；
+- optimizer/scheduler 从新 conditional stage 重置；
+- checkpoint 选择规则只读取固定 validation conditions；
+- 无 NaN/非有限 loss，checkpoint 可重新加载并复现 validation prompt identity；
+- parse/EOS/nominal 指标完整输出，但是否具备进入 GRPO 的可学习信号仍由实验 A 决定。
+
+选定 checkpoint 后冻结为实验 A 和实验 D 两个 GRPO 分支的共同 parent。
+
+#### 第 3 步——实验 A：奖励信息量硬门禁
 
 先物化一份 train-graph-only signal set，使其与 conditional SFT train、正式 RL train、
 validation 和 test 的 query/supervision identity 均不重合。在冻结的 specific-relation
@@ -473,69 +554,31 @@ neutralization 和 3 次 joint replacements；SC-IDC 增量上限为 4 次。
 
 一旦选中 \(\alpha_{\mathrm{IDC}}\)，将 signal-set hash、候选表、选择结果和最终 reward contract
 写入冻结 manifest，之后不得根据 validation/test 调参。若没有候选 \(\alpha_{\mathrm{IDC}}\)
-通过，实验 A 失败并停止，
-先修复 conditional SFT、condition manifest 或 reward 计算，不直接启动 GRPO。
+通过，实验 A 失败并停止，先修复 conditional SFT、condition manifest 或 reward 计算，不直接
+启动 GRPO。
 
-#### 实验 B：OR-append 对抗集（硬门槛）
+#### 第 3 步附带诊断——实验 C-pre：SFT rollout 的 occurrence topology
 
-从一个已经很好解释 \(O\) 的假设开始，添加一个包含指定条件 \(C\)、但被其他 OR 分支完全遮蔽的分支。
-
-预期：
-
-- nominal adherence 仍为 1；
-- 原 condition reward 仍为 1；
-- matched delta 可能为 0，也可能因替代项引入假阳性而大于 0；
-- \(\Delta_C^{\mathrm{marg}}=0\)；
-- 判为 `branch_nonmarginal`，并在这个有标签对抗集上计为 laundering detection 成功。
-
-如果边际门控无法识别这类案例，方案的核心动机就不成立。该实验必须显式包含“matched
-delta 为正但分支仍冗余”的反例，防止实现退回 matched-only 判定。
-
-#### 实验 B1：嵌套 predicate 冗余反例（硬门槛）
-
-显式构造：
-
-\[
-H=(A\land C)\lor D,
-\qquad
-[A\land C]_G=[A]_G,
-\]
-
-并令 \(A\land C\) 整体分支对观测必不可少、某个 \(C'\) 替换会降低语义质量。预期 branch
-marginal 与 matched delta 均为正，分类只能是 `branch_supported_selective`；测试必须同时断言
-系统没有输出 slot necessity 或 predicate-causal claim。该反例防止实现把 branch support 偷换为
-controlled predicate 本身不可删除。
-
-#### 实验 B2：真实 KG reference 审计
-
-在 train graph 的 fresh RL-only reference queries 上，按 pattern 分层抽样，同时枚举所有
-entity/relation occurrences，并在每种条件内赋予 \(1/m\) attribution 权重。该 occurrence-level
-审计不定义 Phase 2 的 prompt 采样单位；硬验收只检查：
-
-- 新旧执行器等价；
-- reference denotation 与 observation 完全一致；
-- matched replacement 保持结构和槽位数；
-- slot 权重契约和确定性产物成立；
-- fallback 后不存在完全不可评分的 slot。
-
-真实 branch-supported selectivity 与 branch-nonmarginal 比例只作诊断，不预设“必须有利”的
-结果门槛，也不把 gold reference 的 branch-nonmarginal 比例命名为 laundering。
-
-#### 实验 C：槽位位置泛化
-
-prompt 不包含 slot 地址，因此不能把 first/non-first occurrence 当成不同控制条件。位置分析按
-condition value 在目标/生成假设中的 occurrence topology 分组：
+C-pre 直接复用实验 A 的 208 个 prompts 和 832 个 completions，不额外训练模型，也不重新抽样。
+prompt 不包含 slot 地址，因此不能把 first/non-first occurrence 当成不同控制条件。按照 manifest
+中 condition value 在 target query 的 occurrence topology 冻结分组：
 
 - 只出现在第一个 relation slot；
 - 只出现在 non-first relation slots；
 - 在多个位置重复出现。
 
-所有训练和评测 prompt 仍按 unique relation values 采样。该分析检查 fixed-first 历史策略留下的
-位置捷径，但不向模型提供它无法观察的 oracle path。
+所有 prompt 仍按 unique relation values 采样。每组报告 prompt support、parse/EOS、nominal、
+scorable、branch-supported selectivity 和 reward-tie 降幅，并保留分母。C-pre 不参与
+\(\alpha_{\mathrm{IDC}}\) 选择，也不向模型提供 oracle path。
 
-#### 实验 D：specific-relation GRPO 主对照
+C-pre 产物必须在 D 前生成，但它是 scope diagnostic，不另设“结果必须有利”的停止阈值：某组少于
+30 个 prompts 时不作该组泛化结论；若 non-first-only 或 repeated 组表现明显弱，只能据实限制
+结论范围，不能把它隐藏在 overall 指标中，也不能据此查看 test 或重新调参。
 
-实验 A 通过后，从同一个冻结的 specific-relation conditional SFT parent 分叉：
+#### 第 4 步——实验 D：specific-relation GRPO 正式主对照
+
+只有 Phase 2 工程契约、实验 B、conditional SFT 和实验 A 全部通过，且 C-pre 报告已经生成后，
+才从同一个冻结的 specific-relation conditional SFT parent 分叉：
 
 - **uniform-value control + original-reward baseline**：保持原 Jaccard/Dice/Overlap 与
   nominal condition reward；
@@ -561,6 +604,16 @@ specific relation，不能外推成 entity control 已被训练验证。
 该 baseline 不能称为“原始 CtrlHGen baseline”：它已经采用 uniform unique-value condition，
 而原实现是 fixed-first condition。准确名称必须保留为
 `uniform-value control + original-reward baseline`。
+
+#### 第 5 步——实验 C-post：正式结果的位置拓扑分析
+
+D 完成后，在冻结的 validation/final-evaluation manifests 上，使用与 C-pre 完全相同的 topology
+定义分别分析两个 GRPO 分支。报告每组 support、nominal adherence、branch-supported rate、
+matched selectivity、branch-supported selectivity、branch-nonmarginal rate、语义质量与复杂度。
+
+C-post 不训练第三个模型，不选择 checkpoint，不修改 \(\alpha_{\mathrm{IDC}}\)，也不把分组结果
+反馈给 D。它回答的是 uniform-value conditional SFT 与 SC-IDC 是否在 non-first/repeated 条件上
+留下不同表现；只对达到预注册最小 support 的分组作泛化结论。
 
 ---
 
