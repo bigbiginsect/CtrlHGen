@@ -37,7 +37,10 @@ from akgr.kgdata import load_kg
 from akgr.reproduction.config import load_experiment_config
 from akgr.reproduction.contracts import ConditionSpec
 from akgr.reproduction.seed import derive_seed, make_generator, seed_everything
-from akgr.reproduction.sc_idc_phase2_data import verify_sft_preflight
+from akgr.reproduction.sc_idc_phase2_data import (
+    verify_frozen_validation_dataset,
+    verify_sft_preflight,
+)
 from akgr.tokenizer import (
     build_generation_prompt,
     condition_value_from_target,
@@ -358,16 +361,11 @@ def run_sft(config, args) -> Path:
         dataset_dict["valid"], validation_config["batch_size"], config.seed, False
     )
     if phase2_context is not None:
-        dataset_ids = {str(value) for value in dataset_dict["valid"]["record_id"]}
-        manifest_ids = set(phase2_context["validation_conditions"])
-        if dataset_ids != manifest_ids:
-            raise ValueError("Frozen validation condition record IDs do not match validation data")
-        for example in dataset_dict["valid"]:
-            record_id = str(example["record_id"])
-            contract = phase2_context["validation_contracts"][record_id]
-            target_hash = hashlib.sha256(example["target"].encode("utf-8")).hexdigest()
-            if target_hash != contract["target_sha256"]:
-                raise ValueError(f"Frozen validation target hash mismatch for {record_id}")
+        verify_frozen_validation_dataset(
+            dataset_dict["valid"],
+            condition_values=phase2_context["validation_conditions"],
+            record_contracts=phase2_context["validation_contracts"],
+        )
     model, tokenizer, loaded = _model_and_tokenizer(
         config, nentity, nrelation, args, args.stage, phase2_context=phase2_context
     )

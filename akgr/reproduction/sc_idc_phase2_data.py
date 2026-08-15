@@ -573,6 +573,26 @@ def require_shared_rl_manifest_hash(first: Mapping[str, Any], second: Mapping[st
     return str(first_hash)
 
 
+def verify_frozen_validation_dataset(
+    dataset,
+    *,
+    condition_values: Mapping[str, str],
+    record_contracts: Mapping[str, Mapping[str, str]],
+) -> None:
+    dataset_ids = {str(value) for value in dataset["record_id"]}
+    manifest_ids = set(condition_values)
+    if dataset_ids != manifest_ids or dataset_ids != set(record_contracts):
+        raise ValueError("Frozen validation condition record IDs do not match validation data")
+    for example in dataset:
+        record_id = str(example["record_id"])
+        contract = record_contracts[record_id]
+        target_hash = hashlib.sha256(example["target"].encode("utf-8")).hexdigest()
+        if target_hash != contract["target_sha256"]:
+            raise ValueError(f"Frozen validation target hash mismatch for {record_id}")
+        if str(condition_values[record_id]) != str(contract["condition_value"]):
+            raise ValueError(f"Frozen validation condition mismatch for {record_id}")
+
+
 def prepare_phase2_data(args: argparse.Namespace) -> Path:
     source_config = load_experiment_config(args.source_config)
     target_config = load_experiment_config(args.target_config)
