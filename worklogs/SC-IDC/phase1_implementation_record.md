@@ -104,6 +104,85 @@ git diff --check
 
 effective/laundering 实际比例只记录为诊断结果，不设置有利方向门槛，也不生成模型能力结论。
 
+## DSW 验证结果
+
+验证日期：2026-08-15
+
+### 分支与代码
+
+- DSW checkout 原先位于 detached HEAD `5514df839a9b7c7b3cf6a12475d5727ed33beba8`，工作树干净。
+- 已先切换到 `innovate/SC-IDC` 并快进同步；测试与审计代码 SHA 为
+  `562690d058d4f3789865739444ffef6d327d087c`。
+- 审计前后 DSW 工作树均为 clean，`HEAD` 与 `origin/innovate/SC-IDC` 一致。
+
+### 完整回归与 self-check
+
+pytest 首次启动时被系统级 Hydra pytest 插件与环境内 OmegaConf 的版本冲突阻断，尚未进入
+测试收集。设置 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`、不加载无关的系统插件后，对同一测试集合
+重新执行：
+
+```text
+137 passed, 2 deselected in 9.41s
+```
+
+独立 `python -m akgr.reproduction.sc_idc_audit --self-check` 通过，并确认 OR-laundering 反例满足：
+
+- matched delta `0.16666666666666666 > 0`；
+- branch marginal delta `0`；
+- 分类为 `laundered`；
+- 新旧执行器等价且替换结构全部保持。
+
+### 真实 WN18RR reference 审计
+
+输入 provenance：
+
+- fresh manifest SHA256：`0c5a096b7b3f40534d63dac8460e45939b56614d3bf8fe0bb0b9225a8f394afa`；
+- fresh artifact SHA256：`6263a2d0ece6d897e850dbcaf71893865cb038e198dbd95b576d8b1609ad9260`；
+- sampling manifest SHA256：`244ef264ad538df30ad58d72127d7fe3c31f52480dc3ddac882978400c49e460`；
+- config semantic hash：`d7978678398d197265c879913d834f79fc9a344201832168a6282a60d1aec296`；
+- config data hash：`7f2fc89a9c629dedf06e243301e091fe53c4409093ba60e00d1069da591b6c47`；
+- config KG hash：`ab2a80eabd45a86cc1dad1acfc65c20b36a451070737b054e903bb2025dda4a9`。
+
+相同 seed 的两次审计分别保存在：
+
+- `/mnt/workspace/ctrlhgen-runs/sc-idc-reference-audit-20260815-562690d-a/`；
+- `/mnt/workspace/ctrlhgen-runs/sc-idc-reference-audit-20260815-562690d-b/`。
+
+每次均分层抽取 208 条 reference queries，枚举得到 944 个槽位行和 416 个
+record-condition 权重单元，共记录 13,279 次执行。全部单次硬门槛通过：
+
+- 13 种 pattern 全覆盖；
+- 新旧执行器等价率 100%；
+- reference exact 与 Jaccard=1 比例 100%；
+- 替换结构保持率 100%；
+- slot 权重契约 100% 正确，最大绝对误差为 0；
+- unscorable slot 为 0；
+- manifest 记录 `git_dirty=false`，未访问 test artifact。
+
+两次确定性产物逐字节一致：
+
+| artifact | SHA256 |
+|---|---|
+| `slot-audit.jsonl` | `935f749034aca66dfe929026d3e579e122a42eef4878e5a6a6c36335f61d1e34` |
+| `summary.json` | `7ce19613fe0975dfbe14647af508eb84e3be3055cf886b8a5925d93186e7362e` |
+
+包含时间和路径的 manifest 按设计不要求一致，A/B SHA256 分别为
+`25c97a39ec32c109dbff7d44461a8a4381a7aac49da82fd094507ada8218848b` 和
+`50faf77b25259ddf24be1c9105b351402bc53c6ca17e9e9a6ac36f24c2affb43`。
+
+主阈值 `epsilon=0` 的诊断结果如下，不作为有利方向门槛：
+
+| 分组 | marginal effective | matched selective | strict effective | laundering |
+|---|---:|---:|---:|---:|
+| overall | 76.44% | 98.04% | 76.44% | 23.56% |
+| specific entity | 75.00% | 97.84% | 75.00% | 25.00% |
+| specific relation | 77.88% | 98.24% | 77.88% | 22.12% |
+| first slot | 87.26% | 98.78% | 87.26% | 12.74% |
+| non-first slot | 65.90% | 97.31% | 65.90% | 34.10% |
+
+`epsilon=0.01` 与主阈值结果相同；`epsilon=0.05` 时 strict effective 为 75.84%，laundering
+为 24.16%。这些数字只描述 reference query 的逻辑机制，不支持模型 semantic-control 结论。
+
 ## 延期范围
 
 以下内容不属于第一阶段代码变更：
