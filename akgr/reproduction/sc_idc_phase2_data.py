@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import random
+import subprocess
 import sys
 from typing import Any, Iterable, Mapping
 
@@ -57,6 +58,15 @@ def _file_sha256(path: os.PathLike[str] | str) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _git_state() -> dict[str, Any]:
+    return {
+        "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "dirty": bool(
+            subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        ),
+    }
 
 
 def checkpoint_tree_sha256(path: os.PathLike[str] | str) -> str:
@@ -598,6 +608,9 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
     target_config = load_experiment_config(args.target_config)
     if source_config.data_hash != target_config.data_hash or source_config.kg_hash != target_config.kg_hash:
         raise ValueError("Source and target configs must share data/KG identity")
+    code_state = _git_state()
+    if code_state["dirty"]:
+        raise ValueError("Phase 2 SFT preflight requires a clean Git worktree")
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=False)
     try:
@@ -708,6 +721,7 @@ def prepare_phase2_data(args: argparse.Namespace) -> Path:
             "schema_version": SCHEMA_VERSION,
             "kind": "sc_idc_specific_relation_sft_preflight",
             "status": "ready",
+            "code": {"sha": code_state["sha"], "dirty": False},
             "target": {
                 "config_path": str(target_config.source_path),
                 "config_file_sha256": _file_sha256(target_config.source_path),
@@ -796,6 +810,11 @@ def verify_sft_preflight(
         raise ValueError("Not an SC-IDC specific-relation SFT preflight")
     if summary.get("status") != "ready":
         raise ValueError("SC-IDC specific-relation SFT preflight is not ready")
+    code_state = _git_state()
+    if code_state["dirty"]:
+        raise ValueError("Specific-relation SFT requires a clean Git worktree")
+    if summary.get("code") != {"sha": code_state["sha"], "dirty": False}:
+        raise ValueError("Specific-relation SFT code SHA differs from frozen preflight")
     for key, value in {
         "config_semantic_hash": target_config.semantic_hash,
         "data_hash": target_config.data_hash,
@@ -838,6 +857,7 @@ def verify_sft_preflight(
     return summary, validation_map, {
         "preflight_path": str(summary_path),
         "preflight_sha256": _file_sha256(summary_path),
+        "code_sha": code_state["sha"],
         "parent_import_path": str(parent_path),
         "parent_import_sha256": parent_ref["sha256"],
         "parent_checkpoint_tree_sha256": parent_ref["checkpoint_tree_sha256"],
