@@ -6,6 +6,10 @@ if [[ $# -ne 4 ]]; then
   exit 2
 fi
 
+: "${CTRLHGEN_DATA_ROOT:?Set CTRLHGEN_DATA_ROOT to the external data directory}"
+: "${CTRLHGEN_CHECKPOINT_ROOT:?Set CTRLHGEN_CHECKPOINT_ROOT to the external checkpoint directory}"
+: "${CTRLHGEN_RUN_ROOT:?Set CTRLHGEN_RUN_ROOT to the external run directory}"
+
 python -c 'import sys, torch; sys.exit(0 if torch.cuda.is_available() else "CUDA is required for Experiment 1")'
 python -m akgr.reproduction.sc_idc_signal_audit \
   --experiment-config "$1" \
