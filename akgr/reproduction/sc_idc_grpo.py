@@ -21,6 +21,10 @@ import time
 import traceback
 from typing import Any, Mapping, Sequence
 
+# PyTorch requires this to make CUDA GEMM deterministic.  Set it before any
+# project import can initialize a CUDA context.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import pandas as pd
 
 from akgr.abduction_model.experiment_runner import _graph_samplers
@@ -549,6 +553,13 @@ def run_branch(args: argparse.Namespace) -> Path:
             parent=Path(args.parent_checkpoint).expanduser().resolve(),
         )
         seed_everything(config.seed)
+        import torch
+
+        if torch.cuda.is_available():
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_math_sdp(True)
+        torch.use_deterministic_algorithms(True, warn_only=False)
         dataset = build_grpo_dataset(records, config=config, tokenizer=loaded.tokenizer)
         graph_samplers = _graph_samplers(config)
         adapter = PairedGRPORewardAdapter(
