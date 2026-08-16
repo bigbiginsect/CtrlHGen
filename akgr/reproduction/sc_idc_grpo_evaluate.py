@@ -136,7 +136,8 @@ def _load_validation_contract(config, preflight_path: Path):
         expected_manifest_sha256=str(reference["manifest_sha256"]),
     )
     rows = _read_condition_rows(manifest_path, manifest)
-    dataset = _datasets(config, ["valid"])["valid"]
+    datasets, _, _ = _datasets(config, ["valid"])
+    dataset = datasets["valid"]
     verify_frozen_validation_dataset(
         dataset, condition_values=conditions, record_contracts=rows
     )
