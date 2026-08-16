@@ -1,6 +1,6 @@
 # SC-IDC Phase 2 specific-relation SFT 正式运行记录
 
-更新时间：2026-08-16 16:47（Asia/Shanghai）
+更新时间：2026-08-16 16:49（Asia/Shanghai）
 
 ## 1. 状态
 
@@ -158,6 +158,19 @@ Experiment 1 与后续两个 GRPO 分支必须共同使用本轮训练规则选�
 
 ## 7. DSW 停止记录
 
-训练、审计和记录提交完成后，将通过官方 `alibabacloud_pai_dsw20220101` SDK 和实例内
-CredentialsURI profile 调用 PAI DSW `StopInstance`，固定 `SaveImage=false`。凭据不会写入日志
-或仓库。API 返回与停机复核将在调用后追加。
+训练、审计和首份终态记录提交完成后，通过官方 `alibabacloud_pai_dsw20220101` SDK 和实例内
+CredentialsURI profile 调用 PAI DSW `StopInstance`。凭据未写入日志或仓库。调用结果：
+
+```text
+before status: Running
+HTTP status: 200
+Success: true
+Code: null
+InstanceId: dsw-uhn5s45l2r8qw8n0f5
+SaveImage: false
+RequestId: 01A009C2-F950-51B5-AD9F-6354DA14913F
+```
+
+API 成功返回后进行了两次独立 SSH 探测，均在 connect timeout 内无法连接
+`47.93.100.200:1024`，确认开发机已停止提供连接。实例没有删除；持久化数据、run 目录和
+checkpoint 均保留。至此本轮 specific-relation SFT 与计费收尾完成。
