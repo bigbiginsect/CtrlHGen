@@ -229,5 +229,23 @@ sampled 6,113、SC-IDC greedy 6,085、SC-IDC sampled 6,130；它们是报告成�
 
 ## 10. DSW 停止记录
 
-待完成 StopInstance 调用与独立 SSH 停止确认后填写。实例只停止，不删除；`save_image=false`，持久化
-run、checkpoint 和数据必须保留。
+训练、validation、hash 复核和本文首版提交完成后，使用实例内 CredentialsURI 临时凭据和官方
+`alibabacloud_pai_dsw20220101` SDK 调用 PAI DSW 2022-01-01
+[`StopInstance`](https://help.aliyun.com/zh/pai/developer-reference/api-pai-dsw-2022-01-01-stopinstance)，
+停止 `cn-beijing` 的 `dsw-uhn5s45l2r8qw8n0f5`。凭据只在内存中交给 Credentials SDK，没有输出、
+写入 run 或仓库。调用结果：
+
+```text
+requested at: 2026-08-17 00:17:26 Asia/Shanghai
+before status: Running
+HTTP status: 200
+Success: true
+Code: null
+InstanceId: dsw-uhn5s45l2r8qw8n0f5
+SaveImage: false
+RequestId: 01A00B5D-18D8-5694-ACD9-8D934FE642DC
+```
+
+无敏感信息的 API 响应已持久化到权威 run 根目录的 `stop-instance-response.json`。成功返回后从本地
+进行了两次独立 `ssh -o BatchMode=yes -o ConnectTimeout=5 ctrlhgen-dsw` 探测，两次均在连接阶段
+超时，确认实例已停止提供 SSH 服务。实例没有删除；持久化数据、run 和 checkpoint 均保留。
