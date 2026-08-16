@@ -186,6 +186,21 @@ a2cfb6d857a4adcce0246dedaf4ce158d9e7e50bbdb8bfa6e2f6191052806187
 
 ## 9. DSW 停止记录
 
-实验、artifact hash 复核与本文首版提交完成后，按阿里云 PAI DSW 2022-01-01 官方
-`StopInstance` API 停止实例 `dsw-uhn5s45l2r8qw8n0f5`，`SaveImage=false`。最终 API 返回和
-SSH 失联核验将在停机完成后补入本文的后续提交；实例不会删除，持久化 run/checkpoint 保留。
+实验、artifact hash 复核与本文首版提交完成后，使用实例内 CredentialsURI 临时凭据，通过官方
+`alibabacloud_pai_dsw20220101` SDK 调用 PAI DSW 2022-01-01 `StopInstance`，停止实例
+`dsw-uhn5s45l2r8qw8n0f5`，没有把凭据写入仓库或日志。调用前 `GetInstance` 返回
+`status=Running`。停止调用结果：
+
+```text
+region: cn-beijing
+HTTP status: 200
+Success: true
+Code: null
+InstanceId: dsw-uhn5s45l2r8qw8n0f5
+SaveImage: false
+RequestId: 01A00AC2-9EE5-5EE4-A038-2DAAB6B4F780
+```
+
+API 响应已持久化到权威 run 根目录的 `stop-instance-response.json`。随后两次独立 SSH 探测均在
+connect timeout 内无法连接 `47.93.100.200:1024`，确认开发机已停止提供连接。实例没有删除；
+持久化 run、数据和 checkpoint 保留。至此 Experiment 1 与本轮计费收尾完成。
