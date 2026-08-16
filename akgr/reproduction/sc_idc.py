@@ -302,6 +302,83 @@ def replace_slot(query: QueryNode, slot: SemanticSlot, token: int) -> QueryNode:
     )
 
 
+def value_occurrences(
+    query: QueryNode, kind: SlotKind, value: int
+) -> tuple[SemanticSlot, ...]:
+    """Return every model-indistinguishable occurrence of one semantic value."""
+    return tuple(
+        slot for slot in extract_semantic_slots(query, kind) if slot.value == int(value)
+    )
+
+
+def replace_value(
+    query: QueryNode, kind: SlotKind, value: int, replacement: int
+) -> QueryNode:
+    """Jointly replace all occurrences of ``value`` with one matched value."""
+    occurrences = value_occurrences(query, kind, value)
+    if not occurrences:
+        raise ValueError(f"Query has no {kind} occurrence for value {value}")
+    result = query
+    for slot in occurrences:
+        result = replace_slot(result, slot, int(replacement))
+    return result
+
+
+def canonical_query_sha256(query: QueryNode) -> str:
+    return hashlib.sha256(action_string(query).encode("utf-8")).hexdigest()
+
+
+def _nearest_branch_path(
+    query: QueryNode, slot: SemanticSlot
+) -> tuple[tuple[int, ...], str] | None:
+    node = query
+    ancestors: list[tuple[tuple[int, ...], QueryNode]] = [((), node)]
+    for depth, child_index in enumerate(slot.path):
+        node = node.children[child_index]
+        ancestors.append((tuple(slot.path[: depth + 1]), node))
+    for ancestor_path, ancestor in reversed(ancestors[:-1]):
+        if ancestor.operator in SET_OPERATORS:
+            child_index = int(slot.path[len(ancestor_path)])
+            return (*ancestor_path, child_index), ancestor.operator
+    return None
+
+
+def neutralize_value_branches(
+    query: QueryNode, kind: SlotKind, value: int
+) -> tuple[QueryNode, tuple[dict[str, Any], ...]]:
+    """Jointly neutralize the nearest branches for all equal-value occurrences.
+
+    Branch paths are reduced to an ancestor-most antichain.  If any occurrence
+    has no intersection/union ancestor, the joint baseline is the empty root.
+    """
+    occurrences = value_occurrences(query, kind, value)
+    if not occurrences:
+        raise ValueError(f"Query has no {kind} occurrence for value {value}")
+    candidates = [_nearest_branch_path(query, slot) for slot in occurrences]
+    if any(item is None for item in candidates):
+        return QueryNode("empty"), ({
+            "branch_path": "root", "branch_operator": None, "identity": "empty"
+        },)
+    unique = {path: operator for path, operator in candidates if path is not None}
+    antichain: list[tuple[tuple[int, ...], str]] = []
+    for path, operator in sorted(unique.items(), key=lambda item: (len(item[0]), item[0])):
+        if any(tuple(path[: len(parent)]) == parent for parent, _ in antichain):
+            continue
+        antichain.append((path, operator))
+    result = query
+    rows = []
+    # Antichain paths do not overlap, so replacement order cannot change paths.
+    for path, operator in antichain:
+        identity = "universe" if operator == "i" else "empty"
+        result = _replace_node(result, path, QueryNode(identity))
+        rows.append({
+            "branch_path": _path_string(path),
+            "branch_operator": operator,
+            "identity": identity,
+        })
+    return result, tuple(rows)
+
+
 def neutralize_slot_branch(query: QueryNode, slot: SemanticSlot) -> Neutralization:
     """Remove the nearest logical branch with its parent's identity element."""
     ancestors: list[tuple[tuple[int, ...], QueryNode]] = []

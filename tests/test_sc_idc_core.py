@@ -17,13 +17,16 @@ from akgr.reproduction.sc_idc import (
     audit_slot,
     extract_semantic_slots,
     legacy_denotation,
+    neutralize_value_branches,
     neutralize_slot_branch,
     parse_action,
     parse_raw_query,
     pattern_signature,
     replace_slot,
+    replace_value,
     select_semantic_slot,
     slot_counts,
+    value_occurrences,
 )
 from akgr.reproduction.sc_idc_audit import (
     load_verified_fresh_records,
@@ -31,6 +34,11 @@ from akgr.reproduction.sc_idc_audit import (
     run_self_check,
     stratified_records,
     summarize,
+)
+from akgr.reproduction.sc_idc_phase2_reward import (
+    CachedQueryExecutor,
+    StaticRelationMatcher,
+    audit_relation_value,
 )
 
 
@@ -237,6 +245,70 @@ class SCIDCCausalTests(unittest.TestCase):
 
     def test_standalone_self_check(self):
         self.assertEqual(run_self_check()["status"], "pass")
+
+
+class SCIDCPhase2ValueTests(unittest.TestCase):
+    def setUp(self):
+        self.sampler = _audit_sampler()
+        self.matcher = StaticRelationMatcher(self.sampler)
+
+    def test_joint_replacement_changes_every_equal_value_occurrence(self):
+        query = parse_action("u -1 1 i -1 2 -2 3")
+        self.assertEqual(len(value_occurrences(query, "specific_relation", -1)), 2)
+        replaced = replace_value(query, "specific_relation", -1, -4)
+        self.assertEqual(len(value_occurrences(replaced, "specific_relation", -1)), 0)
+        self.assertEqual(len(value_occurrences(replaced, "specific_relation", -4)), 2)
+        self.assertEqual(pattern_signature(replaced), pattern_signature(query))
+        self.assertEqual(slot_counts(replaced), slot_counts(query))
+
+    def test_joint_neutralization_uses_ancestor_most_antichain(self):
+        query = parse_action("u -1 i -1 1 -2 2 -3 3")
+        neutral, branches = neutralize_value_branches(
+            query, "specific_relation", -1
+        )
+        self.assertEqual(branches, ({
+            "branch_path": "0", "branch_operator": "u", "identity": "empty"
+        },))
+        self.assertEqual(neutral.operator, "u")
+        self.assertEqual(neutral.children[0].operator, "empty")
+
+    def test_any_root_occurrence_forces_empty_joint_baseline(self):
+        query = parse_action("-1 u -1 1 -2 2")
+        neutral, branches = neutralize_value_branches(
+            query, "specific_relation", -1
+        )
+        self.assertEqual(neutral.operator, "empty")
+        self.assertEqual(branches[0]["branch_path"], "root")
+
+    def test_repeated_or_laundering_is_branch_nonmarginal(self):
+        # Both controlled occurrences are covered by the dominant relation -2.
+        query = parse_action("u -2 2 u -1 1 -1 1")
+        cache = CachedQueryExecutor(self.sampler)
+        row = audit_relation_value(
+            query=query,
+            observation={2},
+            condition_value=-1,
+            matcher=self.matcher,
+            cache=cache,
+            record_id="repeated-or",
+            reward_seed=42,
+        )
+        self.assertEqual(row["occurrence_count"], 2)
+        self.assertAlmostEqual(row["branch_marginal_delta"], 0.0)
+        self.assertEqual(row["classification"], "branch_nonmarginal")
+        self.assertFalse(row["terminology"]["predicate_necessity_claim"])
+
+    def test_static_matcher_is_deterministic_and_compute_bounded(self):
+        query = parse_action("-1 1")
+        first = self.matcher.select(
+            condition_value=-1, query=query, record_id="r", reward_seed=42
+        )
+        second = self.matcher.select(
+            condition_value=-1, query=query, record_id="r", reward_seed=42
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 3)
+        self.assertNotIn(-1, {row["token"] for row in first})
 
 
 class SCIDCAuditContractTests(unittest.TestCase):
