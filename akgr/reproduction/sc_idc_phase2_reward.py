@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 import hashlib
 import math
 import random
@@ -70,11 +70,15 @@ def set_semantic_scores(
 class CachedQueryExecutor:
     """Canonical-AST cache with explicit execution accounting."""
 
-    def __init__(self, graph_sampler) -> None:
+    def __init__(self, graph_sampler, *, max_entries: int | None = None) -> None:
+        if max_entries is not None and int(max_entries) <= 0:
+            raise ValueError("max_entries must be positive when provided")
         self.executor = QueryExecutor(graph_sampler)
-        self.cache: dict[str, frozenset[int]] = {}
+        self.max_entries = None if max_entries is None else int(max_entries)
+        self.cache: OrderedDict[str, frozenset[int]] = OrderedDict()
         self.requests = 0
         self.executions = 0
+        self.evictions = 0
 
     def execute(self, query: QueryNode) -> tuple[frozenset[int], bool]:
         self.requests += 1
@@ -82,10 +86,15 @@ class CachedQueryExecutor:
         # cannot be serialized as model actions. QueryNode repr is canonical.
         key = repr(query)
         if key in self.cache:
-            return self.cache[key], True
+            result = self.cache.pop(key)
+            self.cache[key] = result
+            return result, True
         result = self.executor.execute(query)
         self.cache[key] = result
         self.executions += 1
+        if self.max_entries is not None and len(self.cache) > self.max_entries:
+            self.cache.popitem(last=False)
+            self.evictions += 1
         return result, False
 
 
