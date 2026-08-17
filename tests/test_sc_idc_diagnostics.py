@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from akgr.reproduction.sc_idc_condition_causality import _counterfactual_condition
+import json
+
+import pytest
+
+from akgr.reproduction.sc_idc_condition_causality import (
+    _checkpoint_stage,
+    _counterfactual_condition,
+)
 from akgr.reproduction.sc_idc_offline_diagnostics import summarize
 
 
@@ -51,3 +58,23 @@ def test_counterfactual_condition_skips_relations_in_reference():
     )
     assert value == "-3"
     assert metadata["rank"] == 1
+
+
+@pytest.mark.parametrize("stage", ["conditional", "grpo"])
+def test_condition_causality_accepts_supported_checkpoint_stages(tmp_path, stage):
+    checkpoint = tmp_path / stage
+    checkpoint.mkdir()
+    (checkpoint / "metadata.json").write_text(
+        json.dumps({"stage": stage}), encoding="utf-8"
+    )
+    assert _checkpoint_stage(checkpoint) == stage
+
+
+def test_condition_causality_rejects_unrelated_checkpoint_stage(tmp_path):
+    checkpoint = tmp_path / "unconditional"
+    checkpoint.mkdir()
+    (checkpoint / "metadata.json").write_text(
+        json.dumps({"stage": "unconditional"}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="requires one of"):
+        _checkpoint_stage(checkpoint)

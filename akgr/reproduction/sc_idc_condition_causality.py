@@ -39,6 +39,7 @@ from akgr.utils.load_util import load_reproduction_checkpoint
 
 SCHEMA_VERSION = 1
 SEMANTIC_METRICS = ("jaccard", "dice", "overlap")
+SUPPORTED_CHECKPOINT_STAGES = {"conditional", "grpo"}
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -86,6 +87,21 @@ def _counterfactual_condition(
         if token not in target_values:
             return token, dict(candidate)
     raise ValueError(f"No absent matched relation is available for target {target!r}")
+
+
+def _checkpoint_stage(checkpoint: Path) -> str:
+    """Return an explicitly supported stage before strict checkpoint loading."""
+    metadata_path = checkpoint.expanduser().resolve() / "metadata.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"Missing checkpoint metadata: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    stage = str(metadata.get("stage"))
+    if stage not in SUPPORTED_CHECKPOINT_STAGES:
+        raise ValueError(
+            f"Condition-causality audit requires one of "
+            f"{sorted(SUPPORTED_CHECKPOINT_STAGES)}, got {stage!r}"
+        )
+    return stage
 
 
 def _generate(
@@ -254,10 +270,11 @@ def _audit_checkpoint(
     condition_rows: Mapping[str, Mapping[str, Any]], graph_samplers, output_dir: Path,
     batch_size: int, limit: int | None,
 ) -> dict[str, Any]:
+    checkpoint_stage = _checkpoint_stage(checkpoint)
     loaded = load_reproduction_checkpoint(
         checkpoint,
         mode="test",
-        expected_stage="conditional",
+        expected_stage=checkpoint_stage,
         expected_condition="specific_relation",
         expected_config_hash=config.semantic_hash,
         expected_data_manifest_hash=_file_sha256(config.sampling_manifest_path),
@@ -391,6 +408,7 @@ def _audit_checkpoint(
             "label": label,
             "path": str(checkpoint),
             "tree_sha256": checkpoint_tree_sha256(checkpoint),
+            "stage": checkpoint_stage,
             "stage_epoch": int(loaded.metadata["stage_epoch"]),
             "global_step": int(loaded.metadata["global_step"]),
         },
