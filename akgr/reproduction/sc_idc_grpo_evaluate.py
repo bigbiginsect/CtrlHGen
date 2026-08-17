@@ -386,7 +386,10 @@ def _evaluate_one(
         )
         for record in records:
             record["topology"] = str(condition_rows[str(record["record_id"])]["topology"])
-        records, accounting = _audit_records(records, graph_samplers["train"])
+        # The standard metrics above execute on the cumulative validation graph.
+        # Audit the intervention in that same extensional environment; using the
+        # train graph here makes BSS incomparable with the reported semantics.
+        records, accounting = _audit_records(records, graph_samplers["valid"])
         artifact = _write_jsonl(output_dir / f"{branch}-{decode}.jsonl", records)
         by_topology = {
             topology: _summarize([row for row in records if row["topology"] == topology])

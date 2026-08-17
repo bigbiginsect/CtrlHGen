@@ -842,6 +842,7 @@ def my_parse_args():
     parser.add_argument('--resume-checkpoint')
     parser.add_argument('--checkpoint')
     parser.add_argument('--max-steps', type=int, default=-1)
+    parser.add_argument('--stop-after-epoch', type=int)
     parser.add_argument('--greedy', action='store_true')
 
     # Configurations
@@ -909,6 +910,7 @@ def main():
         strict_flags = {
             '--experiment-config', '--mode', '--stage', '--parent-checkpoint',
             '--phase2-data-manifest', '--resume-checkpoint', '--checkpoint', '--max-steps', '--greedy',
+            '--stop-after-epoch',
             '--test_split', '--overwrite_batchsize',
         }
         supplied_flags = {

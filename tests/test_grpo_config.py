@@ -15,6 +15,7 @@ from akgr.tokenizer import create_reproduction_tokenizer
 def _config(batch_size=4):
     raw = {
         "experiment": {"seed": 42},
+        "generation": {"temperature": 0.8, "top_p": 0.95, "top_k": 17},
         "grpo": {
             "epochs": 1, "learning_rate": 1e-5, "beta": 0.1, "epsilon": 0.2,
             "per_device_train_batch_size": batch_size, "max_completion_length": 8,
@@ -43,9 +44,9 @@ def test_grpo_config_pins_paper_group_and_disables_external_reporting(tmp_path):
     assert result.scale_rewards is True
     assert result.gradient_accumulation_steps == 1
     assert result.max_prompt_length == 512
-    assert result.temperature == 0.9
-    assert result.top_p == 1.0
-    assert result.top_k == 50
+    assert result.temperature == 0.8
+    assert result.top_p == 0.95
+    assert result.top_k == 17
     assert result.repetition_penalty == 1.0
     assert result.use_vllm is False
     assert result.bf16 is False

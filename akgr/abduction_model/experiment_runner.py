@@ -413,7 +413,17 @@ def run_sft(config, args) -> Path:
 
     condition = "unconditional" if args.stage == "unconditional" else config.condition
     global_step = inherited_global_step
-    final_epoch = int(stage_config["epochs"])
+    configured_final_epoch = int(stage_config["epochs"])
+    requested_final_epoch = getattr(args, "stop_after_epoch", None)
+    if requested_final_epoch is None:
+        final_epoch = configured_final_epoch
+    else:
+        final_epoch = int(requested_final_epoch)
+        if final_epoch <= 0 or final_epoch > configured_final_epoch:
+            raise ValueError(
+                "--stop-after-epoch must be between 1 and the configured stage epochs "
+                f"({configured_final_epoch}), got {final_epoch}"
+            )
     if start_epoch >= final_epoch:
         raise ValueError(f"Checkpoint already reached configured {args.stage} epochs")
     root = config.runtime_paths["checkpoint_root"] / config.experiment["name"]

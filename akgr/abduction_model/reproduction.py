@@ -386,6 +386,9 @@ def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: in
     from trl import GRPOConfig
 
     grpo = config.raw["grpo"] if hasattr(config, "raw") else config["grpo"]
+    generation = (
+        config.raw["generation"] if hasattr(config, "raw") else config["generation"]
+    )
     if save_steps is None:
         save_steps = int(grpo["save_steps"])
     weights = grpo["reward_weights"]
@@ -412,9 +415,9 @@ def build_grpo_config(config, output_dir, *, max_steps: int = -1, save_steps: in
         gradient_accumulation_steps=1,
         max_prompt_length=512,
         max_completion_length=int(grpo["max_completion_length"]),
-        temperature=0.9,
-        top_p=1.0,
-        top_k=50,
+        temperature=float(generation["temperature"]),
+        top_p=float(generation["top_p"]),
+        top_k=int(generation["top_k"]),
         repetition_penalty=1.0,
         use_vllm=False,
         bf16=False,
