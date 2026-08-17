@@ -379,6 +379,13 @@ def _audit_checkpoint(
         })
     label = checkpoint.name
     artifact = _write_jsonl(output_dir / f"{label}.jsonl", output_rows)
+    summary = _summarize(output_rows)
+    summary["by_topology"] = {
+        topology: _summarize([
+            row for row in output_rows if str(row["topology"]) == topology
+        ])
+        for topology in sorted({str(row["topology"]) for row in output_rows})
+    }
     result = {
         "checkpoint": {
             "label": label,
@@ -388,7 +395,7 @@ def _audit_checkpoint(
             "global_step": int(loaded.metadata["global_step"]),
         },
         "artifact": artifact,
-        "summary": _summarize(output_rows),
+        "summary": summary,
     }
     model.to("cpu")
     del model, loaded

@@ -119,6 +119,8 @@ def summarize(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     advantage_changed = []
     ordering_changed = []
     advantage_l1 = []
+    base_zero_variance = []
+    augmented_zero_variance = []
     gate_advantage_changed = []
     candidate_set_variation = []
     for group_rows in groups.values():
@@ -131,6 +133,8 @@ def summarize(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         augmented_adv = _normalized_advantages(augmented)
         gate_adv = _normalized_advantages(gate_augmented)
         deltas = [abs(a - b) for a, b in zip(base_adv, augmented_adv)]
+        base_zero_variance.append(len(set(base_values)) == 1)
+        augmented_zero_variance.append(len(set(augmented)) == 1)
         advantage_changed.append(max(deltas, default=0.0) > 1e-8)
         advantage_l1.append(_mean(deltas) or 0.0)
         ordering_changed.append(_ordering(base_values) != _ordering(augmented))
@@ -183,6 +187,17 @@ def summarize(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "groups_with_pairwise_ordering_change_rate": _rate(ordering_changed),
             "groups_with_normalized_advantage_change_rate": _rate(advantage_changed),
             "mean_group_normalized_advantage_l1_change": _mean(advantage_l1),
+            "group_normalized_advantage_l1_threshold_rates": {
+                "greater_than_0.01": _rate(value > 0.01 for value in advantage_l1),
+                "greater_than_0.05": _rate(value > 0.05 for value in advantage_l1),
+                "greater_than_0.10": _rate(value > 0.10 for value in advantage_l1),
+            },
+            "base_zero_variance_group_rate": _rate(base_zero_variance),
+            "augmented_zero_variance_group_rate": _rate(augmented_zero_variance),
+            "zero_variance_group_rate_reduction": (
+                (_rate(base_zero_variance) or 0.0)
+                - (_rate(augmented_zero_variance) or 0.0)
+            ),
             "groups_with_advantage_change_without_base_jaccard_multiplier_rate": _rate(
                 gate_advantage_changed
             ),
