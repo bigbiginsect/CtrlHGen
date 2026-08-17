@@ -256,8 +256,36 @@ branch marginal；matched replacement 只保留诊断。
 
 ## 10. DSW 收尾
 
-停机前应满足：权威产物 hash 完成、checkout clean、无 GPU compute process、文档 commit 已部署。
-随后使用实例内 CredentialsURI 临时凭据和官方 `alibabacloud_pai_dsw20220101` SDK 调用
-`StopInstance(save_image=false)`。最终无敏感信息的响应记录在本节和权威 run 的
-`stop-instance-response.json`。
+停机前核验：
 
+- checkout 为 clean detached `e8201274690cdc444afc490640b85c82994429f2`；
+- 本文档和 `revised_proposal.md` 已部署；
+- 权威 summary、JSONL、paired analysis 和 data audit 全部存在且已计算 hash；
+- NVIDIA L20 显存占用 1 MiB、utilization 0%，没有 GPU compute process；
+- 没有 SC-IDC、GRPO、SFT 或 experiment-runner Python 进程。
+
+随后读取实例内 Alibaba Cloud CLI profile 的 `CredentialsURI` 字段，只在内存中交给 Credentials SDK，
+使用官方 `alibabacloud_pai_dsw20220101` SDK 调用 PAI DSW 2022-01-01
+`StopInstance(save_image=false)`。URI、临时 access key 和 security token 均未打印或写入产物。
+
+无敏感信息的响应已先写入权威 run 的 `stop-instance-response.json`：
+
+```json
+{
+  "api": "PAI DSW 2022-01-01 StopInstance",
+  "before_status": "Running",
+  "code": null,
+  "deployed_git_sha": "e8201274690cdc444afc490640b85c82994429f2",
+  "http_status": 200,
+  "instance_id": "dsw-uhn5s45l2r8qw8n0f5",
+  "message": null,
+  "region": "cn-beijing",
+  "request_id": "01A00FDD-8823-529A-9F28-3EA2ABCBCD0D",
+  "requested_at": "2026-08-17T21:16:12.107903+08:00",
+  "save_image": false,
+  "success": true
+}
+```
+
+API 返回后再次尝试 SSH，端口 1024 在 8 秒连接窗口内超时，确认实例已不再提供 SSH 服务。调用的是
+StopInstance 而不是 DeleteInstance；持久化数据、checkpoints 和 run 未删除。
