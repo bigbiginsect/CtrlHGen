@@ -221,7 +221,10 @@ def _load_pair_examples(pair_summary_path: Path):
     }
 
 
-def _verify_checkpoint(*, checkpoint: Path, selection_path: Path, expected_tree: str, config):
+def _verify_checkpoint(
+    *, checkpoint: Path, selection_path: Path, expected_tree: str,
+    expected_pair_summary_sha256: str, config,
+):
     selection = _read_json(selection_path)
     if selection.get("kind") != "ss_csc_branch_selection":
         raise ValueError("Checkpoint selection is not an SS-CSC branch selection")
@@ -240,10 +243,10 @@ def _verify_checkpoint(*, checkpoint: Path, selection_path: Path, expected_tree:
     loaded = load_reproduction_checkpoint(
         checkpoint,
         mode="test",
-        expected_stage="conditional",
+        expected_stage="ss_csc_single_target",
         expected_condition="specific_relation",
         expected_config_hash=config.semantic_hash,
-        expected_data_manifest_hash=sha256_file(config.sampling_manifest_path),
+        expected_data_manifest_hash=expected_pair_summary_sha256,
     )
     return loaded, {
         "path": str(checkpoint),
@@ -752,7 +755,9 @@ def run_p1(args: argparse.Namespace) -> Path:
         selection_path = Path(args.checkpoint_selection).expanduser().resolve()
         loaded, checkpoint_contract = _verify_checkpoint(
             checkpoint=checkpoint, selection_path=selection_path,
-            expected_tree=str(args.checkpoint_tree_sha256), config=config,
+            expected_tree=str(args.checkpoint_tree_sha256),
+            expected_pair_summary_sha256=pair_contract["pair_summary_sha256"],
+            config=config,
         )
         device = _require_cuda("verifier best-of-N P1")
         torch.backends.cuda.enable_flash_sdp(False)
@@ -899,7 +904,9 @@ def run_p2(args: argparse.Namespace) -> Path:
         loaded, verified_checkpoint = _verify_checkpoint(
             checkpoint=Path(checkpoint_contract["path"]).expanduser().resolve(),
             selection_path=Path(checkpoint_contract["selection_path"]).expanduser().resolve(),
-            expected_tree=str(checkpoint_contract["tree_sha256"]), config=config,
+            expected_tree=str(checkpoint_contract["tree_sha256"]),
+            expected_pair_summary_sha256=p1["inputs"]["pair_validation"]["pair_summary_sha256"],
+            config=config,
         )
         if verified_checkpoint != checkpoint_contract:
             raise ValueError("P2 checkpoint contract differs from P1")
