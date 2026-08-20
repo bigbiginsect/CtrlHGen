@@ -205,6 +205,37 @@ generator 参数、训练目标或 predicate necessity 的更强论断，也不�
 P2 完成并核验后，L20 显存 1 MiB、utilization 0%，没有遗留 verifier/SFT/GRPO 实验进程。正式 P1/P2
 实验代码 SHA 均为 `8e27317934fffdffd2d9b414bf2f8829021e8d1c`。
 
-实例停止操作与官方 API 响应记录将在本文部署后执行，并写入 P2 运行根目录下的
-`stop-instance-response.json`；调用 StopInstance，不调用 DeleteInstance，不删除持久化数据、checkpoint 或
-runs。
+本文的实验记录版本先提交并部署到 clean detached
+`4f5d7c46e4c81df1c75b84a88f8aa57e5cd49674`。随后从 PID 1 环境读取实例注入的 CredentialsURI，临时凭据只
+在内存中交给官方 SDK，没有打印或写入实验产物。调用 PAI DSW 2022-01-01
+`StopInstance(save_image=false)`，不调用 DeleteInstance，不删除持久化数据、checkpoint 或 runs。
+
+脱敏响应写入：
+
+```text
+/mnt/workspace/ctrlhgen-runs/verifier-best-of-n-p2-20260821-8e27317/stop-instance-response.json
+```
+
+文件 SHA256 为 `7c8123fe6fab798aca525b631395f05a7b1a0abfd6e0e3ae015cb85466d3b045`。响应：
+
+```json
+{
+  "api": "PAI DSW 2022-01-01 StopInstance",
+  "before_status": "Running",
+  "code": null,
+  "deployed_git_sha": "4f5d7c46e4c81df1c75b84a88f8aa57e5cd49674",
+  "experiment_git_sha": "8e27317934fffdffd2d9b414bf2f8829021e8d1c",
+  "http_status": 200,
+  "instance_id": "dsw-uhn5s45l2r8qw8n0f5",
+  "message": null,
+  "region": "cn-beijing",
+  "request_id": "01A01FF9-D1B6-5FE6-8F07-33E7B79441A6",
+  "requested_at": "2026-08-21T00:21:00.979124+08:00",
+  "save_image": false,
+  "success": true
+}
+```
+
+API 返回后等待 10 秒，再以 8 秒连接窗口尝试 SSH；端口 1024 超时，确认实例已停止提供 SSH 服务。最终关机
+信息是在实例停止后补入本文，因此 DSW 停止时 checkout 是上述 `4f5d7c4...`，最终记录提交只保存在本地和
+`origin`，不能也无需在已停止实例上再次切换。
