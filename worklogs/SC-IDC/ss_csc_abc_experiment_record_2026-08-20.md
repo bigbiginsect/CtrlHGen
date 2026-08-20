@@ -223,6 +223,34 @@ validation 的更大退化方向一致。
 
 ## 9. DSW 收尾
 
-实验结束时：DSW checkout 为 clean detached `45af7901c15d937fd6762d9ec8e7581b81097576`；L20 显存
-1 MiB、utilization 0%；没有 SS-CSC/SFT/GRPO 实验进程。StopInstance 响应将在文档提交、部署和最终 hash
-复核后补记。
+实验结束时：先将本文部署到 clean detached
+`38fa9909ed6cb6ca5823d028208bc0c2d11fd841`；L20 显存 1 MiB、utilization 0%；没有
+SS-CSC/SFT/GRPO 实验进程。随后使用实例内 CredentialsURI 临时凭据和官方
+`alibabacloud_pai_dsw20220101` SDK 调用 PAI DSW 2022-01-01 `StopInstance(save_image=false)`。
+凭据只在内存中交给 SDK，没有写入实验产物。
+
+无敏感信息的响应已写入：
+
+```text
+/mnt/workspace/ctrlhgen-runs/ss-csc-abc-20260820-ade65d2/stop-instance-response.json
+```
+
+```json
+{
+  "api": "PAI DSW 2022-01-01 StopInstance",
+  "before_status": "Running",
+  "code": null,
+  "deployed_git_sha": "38fa9909ed6cb6ca5823d028208bc0c2d11fd841",
+  "http_status": 200,
+  "instance_id": "dsw-uhn5s45l2r8qw8n0f5",
+  "message": null,
+  "region": "cn-beijing",
+  "request_id": "01A01F0D-37AF-5C96-BFBE-257DCDD6CFCA",
+  "requested_at": "2026-08-20T20:02:35.049763+08:00",
+  "save_image": false,
+  "success": true
+}
+```
+
+API 返回后 10 秒再次尝试 SSH，端口 1024 在 8 秒连接窗口内超时，确认实例已停止提供 SSH 服务。
+调用的是 StopInstance 而不是 DeleteInstance；持久化数据、checkpoints 和 runs 未删除。
