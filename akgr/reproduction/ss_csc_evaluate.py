@@ -13,6 +13,9 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
+# Must be set before torch can initialize a CUDA context.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import torch
 
 from akgr.abduction_model.experiment_runner import _graph_samplers, _prompt_length, _require_cuda
@@ -257,6 +260,10 @@ def run_evaluation(args: argparse.Namespace) -> Path:
         raise FileExistsError(output)
     output.mkdir(parents=True)
     device = _require_cuda("SS-CSC Experiment C")
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     graph_sampler = _graph_samplers(config)["train"]
     all_rows, summaries, artifacts, selection_payloads = {}, {}, {}, {}
     for name in sorted(models):

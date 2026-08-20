@@ -4,11 +4,17 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import networkx as nx
+import torch
 
 from akgr.reproduction.sc_idc import QueryExecutor, parse_action
-from akgr.reproduction.ss_csc_common import load_pair_artifact, summarize_pair_likelihood
+from akgr.reproduction.ss_csc_common import (
+    load_pair_artifact,
+    reference_mean_log_probs,
+    summarize_pair_likelihood,
+)
 from akgr.reproduction.ss_csc_data import _branch_audits, _choose_condition, _pair_rank
 from akgr.reproduction.ss_csc_evaluate import _bootstrap_delta
+from akgr.tokenizer import create_reproduction_tokenizer
 
 
 class _Sampler:
@@ -66,6 +72,27 @@ class SSCscDataTests(unittest.TestCase):
 
 
 class SSCscEvaluationTests(unittest.TestCase):
+    def test_reference_likelihood_encodes_target_not_duplicate_prompt(self):
+        tokenizer = create_reproduction_tokenizer(3, 2)
+
+        class SpyModel(torch.nn.Module):
+            def forward(self, input_ids, attention_mask):
+                self.input_ids = input_ids.detach().clone()
+                return type("Output", (), {
+                    "logits": torch.zeros(
+                        *input_ids.shape, len(tokenizer), device=input_ids.device
+                    )
+                })()
+
+        model = SpyModel()
+        scores = reference_mean_log_probs(
+            model=model, tokenizer=tokenizer, prompts=["1 COND -1"],
+            targets=["-2 2"], device=torch.device("cpu"), max_length=20,
+        )
+        tokens = tokenizer.convert_ids_to_tokens(model.input_ids[0].tolist())
+        self.assertEqual(tokens, ["1", "COND", "-1", "SEP", "-2", "2", "END"])
+        self.assertEqual(scores.shape, (1,))
+
     def test_likelihood_summary_and_paired_bootstrap(self):
         rows = [{
             "h1_c1_mean_logp": -1.0, "h2_c2_mean_logp": -1.2,

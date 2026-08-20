@@ -84,7 +84,7 @@ def reference_mean_log_probs(
     try:
         tokenizer.padding_side = "right"
         encoded = tokenizer(
-            list(prompts), list(prompts), list(targets), padding="longest",
+            list(prompts), list(targets), padding="longest",
             truncation=True, max_length=int(max_length), return_tensors="pt",
         ).to(device)
         prompt_mask = tokenizer(

@@ -13,6 +13,9 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
+# Must be set before torch can initialize a CUDA context.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import torch
 
 from akgr.abduction_model.experiment_runner import (
@@ -24,7 +27,7 @@ from akgr.abduction_model.experiment_runner import (
     _prompt_length,
     _require_cuda,
 )
-from akgr.abduction_model.reproduction import create_sft_optimizer_schedule, sft_validation_loss
+from akgr.abduction_model.reproduction import create_sft_optimizer_schedule
 from akgr.reproduction.config import load_experiment_config
 from akgr.reproduction.seed import derive_seed, seed_everything
 from akgr.reproduction.sc_idc_phase2_data import (
@@ -42,7 +45,7 @@ from akgr.reproduction.ss_csc_common import (
     sha256_file,
     summarize_pair_likelihood,
 )
-from akgr.tokenizer import dynamic_condition_value_from_target, prepare_batch
+from akgr.tokenizer import dynamic_condition_value_from_target
 from akgr.utils.load_util import load_reproduction_checkpoint, save_reproduction_checkpoint
 
 
@@ -168,14 +171,30 @@ def _train_epoch(
 def _original_validation(
     *, model, tokenizer, config, dataset, conditions, graph_samplers, device,
 ) -> dict[str, Any]:
-    loader = _loader(dataset, config.raw["training"]["validation"]["batch_size"], config.seed, False)
-    prepare = lambda sample: prepare_batch(
-        device, sample, tokenizer, True, _prompt_length(config),
-        config.raw["generation"]["max_new_tokens"], False, config.condition,
-        condition_delimiter=config.raw["tokenizer"]["condition_delimiter"],
-        condition_value_by_record_id=conditions,
-    )
-    loss = sft_validation_loss(model=model, dataloader=loader, prepare=prepare)
+    batch_size = int(config.raw["training"]["validation"]["batch_size"])
+    loader = _loader(dataset, batch_size, config.seed, False)
+    loss_total = 0.0
+    loss_count = 0
+    model.eval()
+    with torch.no_grad():
+        for sample in loader:
+            examples = [
+                {
+                    "source": str(source), "target": str(target),
+                    "condition_value": str(conditions[str(record_id)]),
+                }
+                for source, target, record_id in zip(
+                    sample["source"], sample["target"], sample["record_id"]
+                )
+            ]
+            batch_loss = _assigned_loss(
+                model, tokenizer, examples, device=device,
+                delimiter=config.raw["tokenizer"]["condition_delimiter"],
+                max_length=_prompt_length(config) + int(config.raw["generation"]["max_new_tokens"]),
+            )
+            loss_total += float(batch_loss.detach().cpu()) * len(examples)
+            loss_count += len(examples)
+    loss = loss_total / loss_count
     records = _evaluation_records(
         config=config, dataloader=loader, model=model, tokenizer=tokenizer,
         graph_samplers=graph_samplers, device=device, split="valid",
@@ -264,6 +283,10 @@ def run_training(args: argparse.Namespace) -> Path:
         expected_data_manifest_hash=parent_import["source"]["sampling_manifest_sha256"],
     )
     device = _require_cuda(f"SS-CSC {args.branch}")
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     model, tokenizer = loaded.model.to(device), loaded.tokenizer
     training = pilot["training"]
     epochs = int(training["epochs"])
