@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "method": "SS-CSC",
+  "dataset": "WN18RR",
+  "condition": "specific_relation",
+  "seed": 42,
+  "data": {
+    "validation_modulus": 10,
+    "validation_remainder": 0,
+    "max_pairs_per_observation": 2,
+    "min_train_pairs": 5000,
+    "matched_replacements": 3
+  },
+  "training": {
+    "epochs": 10,
+    "evaluate_every_epochs": 5,
+    "learning_rate": 5e-5,
+    "micro_batch_examples": 160,
+    "micro_batch_pairs": 80,
+    "gradient_accumulation_steps": 1,
+    "margin": 0.2,
+    "lambda_swap": 0.1,
+    "optimizer": {
+      "name": "adam",
+      "betas": [0.9, 0.999],
+      "eps": 1e-8,
+      "weight_decay": 0.0
+    },
+    "scheduler": {
+      "name": "linear_warmup_constant",
+      "warmup_unit": "optimizer_step",
+      "warmup_value": 5,
+      "start_factor": 0.1
+    }
+  },
+  "decision_gates": {
+    "paired_selection_min_gain_over_paired_sft": 0.03,
+    "symmetric_margin_min_gain_over_paired_sft": 0.03,
+    "paired_bootstrap_ci_lower_must_exceed": 0.0,
+    "bootstrap_samples": 10000,
+    "original_validation_semantic_tolerance": 0.01,
+    "parse_rate_tolerance": 0.005,
+    "eos_rate_tolerance": 0.005
+  }
+}
