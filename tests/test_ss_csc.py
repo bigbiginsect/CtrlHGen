@@ -16,13 +16,15 @@ class _Sampler:
         self.graph = nx.MultiDiGraph()
         self.graph.add_nodes_from(range(5))
         self.graph.add_edge(0, 2, key=0)
+        self.graph.add_edge(0, 3, key=0)
         self.graph.add_edge(1, 2, key=1)
+        self.graph.add_edge(1, 4, key=1)
 
 
 class SSCscDataTests(unittest.TestCase):
     def test_branch_audit_and_condition_selection(self):
         executor = QueryExecutor(_Sampler())
-        query = parse_action("u -1 1 -2 2")
+        query = parse_action("i -1 1 -2 2")
         observation = frozenset({2})
         audits = _branch_audits(query, observation, executor)
         self.assertEqual(set(audits), {-1, -2})
