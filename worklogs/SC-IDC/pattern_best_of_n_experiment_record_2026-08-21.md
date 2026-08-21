@@ -186,6 +186,34 @@ specific-relation 结果，这一 inference selection 思路已覆盖两种 cond
 
 ## 8. DSW 收尾
 
-实验记录提交并部署后，确认 GPU 空闲且无实验进程，再使用实例内 CredentialsURI 临时凭据和官方 PAI DSW
-2022-01-01 `StopInstance(save_image=false)` 停止开发机。API 响应只保留脱敏字段，并写入本轮 run 目录；
-不调用 DeleteInstance，不删除 persistent data/checkpoints/runs。
+实验记录提交 `697168ce58cf6fe8b8df2cec30aeae57ed167838` 已 push，并在停机前让 DSW clean detached 到该
+SHA。最终确认 L20 显存 1 MiB、utilization 0%，无 pattern verifier、训练或 torchrun 进程。
+
+随后从 PID 1 读取标准 `ALIBABA_CLOUD_CREDENTIALS_URI`，只在进程内存中交给官方 credentials SDK；URI、
+access key、secret 与 security token 均未打印或写入产物。先用官方 `GetInstance` 确认实例为 `Running`，再用
+PAI DSW 2022-01-01 SDK 调用 `StopInstance(save_image=false)`。脱敏响应保存在：
+
+```text
+/mnt/workspace/ctrlhgen-runs/pattern-best-of-n-p2-20260821-86bd5a8/stop-instance-response.json
+```
+
+```json
+{
+  "api": "PAI DSW 2022-01-01 StopInstance",
+  "before_status": "Running",
+  "code": null,
+  "deployed_git_sha": "697168ce58cf6fe8b8df2cec30aeae57ed167838",
+  "http_status": null,
+  "instance_id": "dsw-uhn5s45l2r8qw8n0f5",
+  "message": null,
+  "preflight_only": false,
+  "region": "cn-beijing",
+  "request_id": "01A02497-B743-5375-A9A2-6127A04F17E0",
+  "requested_at": "2026-08-21T13:51:57.758759+00:00",
+  "save_image": false,
+  "success": true
+}
+```
+
+API 成功后等待 15 秒，再以 8 秒连接窗口尝试 SSH，端口 1024 超时，确认实例已停止提供 SSH 服务。调用的是
+StopInstance 而不是 DeleteInstance；persistent data、checkpoints 与 runs 均未删除。
