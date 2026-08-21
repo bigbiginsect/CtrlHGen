@@ -1,0 +1,191 @@
+# Pattern Verifier-guided Best-of-N 实验记录（2026-08-21）
+
+## 1. 结论
+
+Pattern-P1 validation gate 全部通过，随后按冻结合同只运行了一次 Pattern-P2 historical test。P2 上
+pattern-aware Best-of-4 相对 greedy：
+
+- SemAvg：`0.65878657 -> 0.74909886`，差值 `+0.09031229`，paired bootstrap 95% CI
+  `[+0.07748927, +0.10268314]`；
+- observable exact：`0.34495192 -> 0.40384615`，差值 `+0.05889423`，95% CI
+  `[+0.04627404, +0.07151442]`；
+- Pattern Accuracy：`0.94290865 -> 0.95432692`，差值 `+0.01141827`，95% CI
+  `[+0.00360577, +0.01923077]`；
+- SMATCH（evaluation only）：`0.81680792 -> 0.82941114`，差值 `+0.01260322`，95% CI
+  `[+0.00883525, +0.01658537]`。
+
+pattern-aware 与 exact-semantic 的 SemAvg、exact 完全相同；pattern-aware 额外把 P2 Pattern Accuracy
+提高 `+0.00661058`，95% CI `[+0.00300481, +0.01081731]`。因此主要增益来自 execution-semantic
+Best-of-N，pattern-aware tie-break 在不损失语义的前提下提供了较小但可辨识的控制增益，不能把全部提升归因于
+pattern verifier。
+
+## 2. 实现、部署与冻结合同
+
+- 实现提交：`86bd5a85a9da9df8cadb8b885287a6f5d98c5a24`
+- DSW checkout：formal P1/P2 均为 clean detached 上述 SHA
+- 新入口：`akgr/reproduction/pattern_verifier_best_of_n.py`
+- 新测试：`tests/test_pattern_verifier_best_of_n.py`
+- 定向测试：`15 passed in 6.15s`，运行时设置
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`，用于隔离系统 Hydra/OmegaConf pytest plugin 冲突
+- GPU：NVIDIA L20；PyTorch `2.6.0+cu124`；CUDA `12.4`
+- seed：`314159`；bootstrap seed：`271828`；bootstrap：10,000 paired record resamples
+- sampling：temperature `1.0`、top-k `0`、top-p `1.0`、batch size `32`
+- nested candidates：P1 `K=1/2/4/8`；P2 冻结 `K=4`
+- selector：exact+pattern > exact > SemAvg > equal-SemAvg pattern tie-break > mean log-prob > canonical SHA256
+- selection inputs 仅为 observation、observable graph、pattern condition 与 candidate；reference H 只在所有
+  selector index 冻结后进入 SMATCH evaluation
+
+冻结 lineage：
+
+| 项目 | 值 |
+|---|---|
+| checkpoint pointer | `/mnt/workspace/ctrlhgen-checkpoints/repro-wn-pattern-full-train-author-aligned-c4/phase-d-parent` |
+| resolved checkpoint | `conditional-epoch-45` |
+| checkpoint tree SHA256 | `16b9f0dbd58e4eaad0ffc00c4d52a0d90522ddeaeb9d611d51f60d3b8679c99c` |
+| pointer SHA256 | `b8ae1bdfe3e9161222645a38c02c9e21887189fabbfb7fdca2274145c27fd33a` |
+| metadata SHA256 | `0e33477537a199122366c5b38ba9e07da9a8ba1afd82daea830e419cde8322d0` |
+| config semantic hash | `d7978678398d197265c879913d834f79fc9a344201832168a6282a60d1aec296` |
+| config file SHA256 | `2cc8689f13d242a0e15f5d28b0cbe97d722a5b7aa86a8cbe47ca87f15badeaaa` |
+| sampling manifest SHA256 | `244ef264ad538df30ad58d72127d7fe3c31f52480dc3ddac882978400c49e460` |
+| validation artifact SHA256 | `950dca912f2d602d32894562b6b17f856e350c0158d125bb01d784d51adeed75` |
+| historical test artifact SHA256 | `38bf3b26367be27cf03689a1dd2b168a505024fde14ea065df4ec084c01929a3` |
+
+## 3. Smoke 与异常记录
+
+第一次 2-record smoke 在配置加载前 fail-closed，因为非交互 DSW shell 没有导出
+`CTRLHGEN_DATA_ROOT`、`CTRLHGEN_CHECKPOINT_ROOT`、`CTRLHGEN_RUN_ROOT`。该次没有加载数据、checkpoint 或
+GPU，也没有产生指标：
+
+```text
+/mnt/workspace/ctrlhgen-runs/pattern-best-of-n-smoke-20260821-86bd5a8/
+```
+
+补齐仓库规定的 persistent roots 后，在新目录执行正式 2-record GPU smoke，完整通过 greedy、nested K、五类
+selector、graph execution、SMATCH 与 lineage 检查；records SHA256 为
+`ab867281d84f49eea252857c8eedfd9330192274b45420125cc654bab34ba940`：
+
+```text
+/mnt/workspace/ctrlhgen-runs/pattern-best-of-n-smoke-v2-20260821-86bd5a8/
+```
+
+后台启动包装命令还出现一次 launcher PID 文件的 shell `&` 优先级竞态，但只读核对确认唯一正式 P1 进程
+PID 4004 已正常启动，没有重复运行。runner 自身的 `control.json`、`status.json` 和 `run.log` 不受影响。
+
+## 4. Pattern-P1 validation
+
+正式目录：
+
+```text
+/mnt/workspace/ctrlhgen-runs/pattern-best-of-n-p1-20260821-86bd5a8/
+```
+
+greedy 与预登记 sanity 数值逐项吻合：Jaccard `0.61963729`、Dice `0.67458461`、Overlap
+`0.74545728`、PA `0.95913462`、SMATCH `0.82834079`、parse `0.99939904`、EOS `1.0`，未发现
+checkpoint/prompt/split 偏差。
+
+| decoding / selector | SemAvg | exact | PA | SMATCH | parse | EOS |
+|---|---:|---:|---:|---:|---:|---:|
+| greedy | 0.67989306 | 0.34194712 | 0.95913462 | 0.82834079 | 0.99939904 | 1.00000000 |
+| sample K=1 / first | 0.63468152 | 0.31550481 | 0.95853365 | 0.82407211 | 0.99759615 | 1.00000000 |
+| sample K=2 / pattern-aware | 0.70255487 | 0.35516827 | 0.95913462 | 0.83000012 | 0.99939904 | 1.00000000 |
+| likelihood-only K=4 | 0.67752532 | 0.34375000 | 0.95973558 | 0.82839388 | 0.99939904 | 1.00000000 |
+| semantic-only K=4 | 0.75097471 | 0.38822115 | 0.95312500 | 0.83266137 | 0.99939904 | 1.00000000 |
+| exact-semantic K=4 | 0.75097471 | 0.38822115 | 0.95312500 | 0.83266137 | 0.99939904 | 1.00000000 |
+| **pattern-aware K=4** | **0.75097471** | **0.38822115** | **0.96274038** | **0.83458979** | **0.99939904** | **1.00000000** |
+| pattern-aware K=8 diagnostic | 0.78609007 | 0.41526442 | 0.96754808 | 0.83854176 | 1.00000000 | 1.00000000 |
+
+K=4 coverage：any exact `0.38822115`、any pattern-match `0.97956731`、any exact+pattern
+`0.38161058`。K=4 vs greedy SemAvg paired W/T/L 为 `379/1243/42`。
+
+P1 paired bootstrap：
+
+| comparison | metric | mean delta | 95% CI |
+|---|---|---:|---:|
+| pattern-aware - greedy | SemAvg | +0.07108165 | [+0.06010032, +0.08213740] |
+| pattern-aware - greedy | exact | +0.04627404 | [+0.03485577, +0.05829327] |
+| pattern-aware - greedy | PA | +0.00360577 | [-0.00300481, +0.01081731] |
+| pattern-aware - greedy | SMATCH | +0.00624900 | [+0.00332662, +0.00918920] |
+| pattern-aware - exact-semantic | SemAvg | 0.00000000 | [0.00000000, 0.00000000] |
+| pattern-aware - exact-semantic | PA | +0.00961538 | [+0.00540865, +0.01442308] |
+| pattern-aware - likelihood-only | SemAvg | +0.07344939 | [+0.06388193, +0.08318927] |
+| pattern-aware - likelihood-only | PA | +0.00300481 | [-0.00420673, +0.00961538] |
+
+Gate 全过：SemAvg/exact 不低于 greedy；PA/parse/EOS 在 `-0.005` 容差内；相对 exact-semantic 的 PA 不降且
+SemAvg 不低于 `-0.005`；K=4 成本齐全；selector reference-free；lineage/artifact hashes 齐全。因此允许一次性
+进入 P2，没有根据 P1 修改方法、K、seed 或 selector。
+
+成本：greedy `1,664` sequences、`11,549` tokens、`1,663` graph executions、runner-accounted wall
+`6.93s`；K=4 `6,656` sequences、`46,200` tokens、`6,642` executions、`15.01s`；K=8
+`13,312` sequences、`92,383` tokens、`13,289` executions、`25.98s`。P1 端到端 wall
+`32.27s`。
+
+## 5. Pattern-P2 historical-test comparison
+
+正式目录：
+
+```text
+/mnt/workspace/ctrlhgen-runs/pattern-best-of-n-p2-20260821-86bd5a8/
+```
+
+P2 由 passed P1 summary 恢复并校验 clean Git SHA、checkpoint/pointer/tree/config/data/manifest hashes、seed、
+K、batch size、max tokens、method version、selector、P1 summary/records hashes。P1 consumption marker SHA256：
+`8161fd2cf5580c013634cb8bee1195f04ce1318f8885a46d4b95abb859d30fa4`。未运行第二次 test。
+
+greedy 同样逐项吻合预登记 sanity：Jaccard `0.60304065`、Dice `0.65172750`、Overlap `0.72159158`、
+PA `0.94290865`、SMATCH `0.81680792`、parse `0.99158654`、EOS `1.0`。
+
+| decoding / selector | Jaccard | Dice | Overlap | SemAvg | exact | PA | SMATCH | parse | EOS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| greedy | 0.60304065 | 0.65172750 | 0.72159158 | 0.65878657 | 0.34495192 | 0.94290865 | 0.81680792 | 0.99158654 | 1.00000000 |
+| first-sample K=1 | 0.56497923 | 0.60782050 | 0.66816456 | 0.61365476 | 0.32211538 | 0.94711538 | 0.81283705 | 0.99158654 | 1.00000000 |
+| pattern-aware K=2 | 0.63774017 | 0.68455360 | 0.75571003 | 0.69266793 | 0.36778846 | 0.94831731 | 0.82158444 | 0.99399038 | 1.00000000 |
+| likelihood-only K=4 | 0.61175413 | 0.66019124 | 0.73044779 | 0.66746439 | 0.35276442 | 0.94350962 | 0.81913480 | 0.99278846 | 1.00000000 |
+| semantic-only K=4 | 0.69056009 | 0.73923262 | 0.81750388 | 0.74909886 | 0.40384615 | 0.94771635 | 0.82785443 | 0.99579327 | 1.00000000 |
+| exact-semantic K=4 | 0.69056009 | 0.73923262 | 0.81750388 | 0.74909886 | 0.40384615 | 0.94771635 | 0.82785443 | 0.99579327 | 1.00000000 |
+| **pattern-aware K=4** | **0.69056009** | **0.73923262** | **0.81750388** | **0.74909886** | **0.40384615** | **0.95432692** | **0.82941114** | **0.99699519** | **1.00000000** |
+
+K=4 coverage：any exact `0.40384615`、any pattern-match `0.96694712`、any exact+pattern
+`0.39663462`。K=4 vs greedy SemAvg W/T/L 为 `417/1196/51`。
+
+pattern-aware - likelihood-only：SemAvg `+0.08163447`，95% CI `[+0.07112099, +0.09212581]`；PA
+`+0.01081731`，95% CI `[+0.00420673, +0.01742788]`。
+
+成本：greedy `1,664` sequences、`11,518` tokens、`1,650` graph executions、runner-accounted wall
+`5.16s`；K=4 `6,656` sequences、`46,073` tokens、`6,602` executions、`13.12s`。P2 端到端 wall
+`19.43s`。
+
+13 个 pattern 的 SemAvg 均提高；PA 在 `pi`（`0.867188 -> 0.851562`）和 `inp`
+（`1.000000 -> 0.992188`）slice 有描述性下降，其余持平或提高。未对 13 slices 作无校正显著性声明。
+
+```text
+historical_test_previously_accessed = true
+post_evaluation_tuning_permitted = false
+```
+
+## 6. Artifacts 与 hashes
+
+| artifact | count | SHA256 |
+|---|---:|---|
+| P1 `summary.json` | 1 | `cec9a2a3e9c9d4c8f63691e1e365dad629435ee6d244f0100edea4110b154cd3` |
+| P1 `records.jsonl` | 1,664 | `656408652d88cde617f08a11cf85640a00f9a6cece9eb21cd7f9daa40dc402eb` |
+| P2 `summary.json` | 1 | `a46bbcb5bf69941345209e1f5c6c41404b65db33029e6f89b4a02f1e4ee5bb93` |
+| P2 `records.jsonl` | 1,664 | `723f143c08ee3eb656b19c8dd8cbb75b3458a95711b4d0aedfa64d697674b28f` |
+
+每个正式目录均包含 `status.json`、`summary.json`、`records.jsonl`、`run.log`、`control.json`。P1/P2
+完成后 L20 均回到 1 MiB、utilization 0%，没有遗留 pattern verifier、训练或 torchrun 进程。
+
+## 7. 解释边界
+
+结果支持：在既有 WN18RR conditional-pattern SFT generator 上，冻结的 verifier-guided Best-of-4 decoding
+在保持/提高整体 pattern adherence 和生成健康度的同时，提高 observable-graph semantic quality；结合既有
+specific-relation 结果，这一 inference selection 思路已覆盖两种 condition kinds。
+
+结果不支持新的 generator training improvement、新 sealed test 首次泛化、完整 KG 逻辑等价、多数据集普适性，
+也不能忽略约 4 倍 candidate generation/execution 成本。historical test 以前已被 Phase C frozen test 与 epoch
+45/50 bake-off 使用，本轮不允许 post-evaluation tuning 或第二次 P2。
+
+## 8. DSW 收尾
+
+实验记录提交并部署后，确认 GPU 空闲且无实验进程，再使用实例内 CredentialsURI 临时凭据和官方 PAI DSW
+2022-01-01 `StopInstance(save_image=false)` 停止开发机。API 响应只保留脱敏字段，并写入本轮 run 目录；
+不调用 DeleteInstance，不删除 persistent data/checkpoints/runs。
