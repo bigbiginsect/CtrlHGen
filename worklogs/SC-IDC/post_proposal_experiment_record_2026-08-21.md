@@ -4,7 +4,8 @@
 数据集/条件：WN18RR / `specific_relation`  
 方案：`worklogs/SC-IDC/post_proposal.md`  
 结论：P1 全部门槛通过；随后按冻结合同只运行一次 P2。sealed evaluation 上 K=4 相对 greedy 的
-SemAvg 提高 `+0.10028`，exact 提高 `+0.08594`，branch-supported 提高 `+0.06130`。
+Jaccard / Dice / Overlap 分别提高 `+0.10288 / +0.10020 / +0.09776`，exact 提高 `+0.08594`，
+branch-supported 提高 `+0.06130`。
 
 ## 1. 方法与论断边界
 
@@ -15,7 +16,7 @@ SemAvg 提高 `+0.10028`，exact 提高 `+0.08594`，branch-supported 提高 `+0
 exact + branch-supported
   > exact + nominal
   > exact
-  > highest SemAvg
+  > highest (Jaccard + Dice + Overlap) / 3
   > model mean log probability
   > canonical hypothesis SHA256
 ```
@@ -24,6 +25,34 @@ exact + branch-supported
 表述为 WN18RR / `specific_relation` 上的 inference-time decoding improvement，不能表述为 generator training
 improvement。observable-graph exactness 不等于隐藏完整 KG 上的逻辑等价；nominal、branch-supported 和
 non-root branch-supported 仍是不同强度的控制证据。
+
+### 1.1 评价指标
+
+令候选 hypothesis 在当前 observable graph 上的执行结果为 `A=[H]_G`，输入 observation 的实体集合为 `O`。
+本记录不再使用一个汇总数代替三个语义指标，而是始终分别报告：
+
+```text
+Jaccard = |A ∩ O| / |A ∪ O|
+Dice    = 2|A ∩ O| / (|A| + |O|)
+Overlap = |A ∩ O| / min(|A|, |O|)
+```
+
+此外单独报告：
+
+- `exact`：`A == O`；这是 observable graph 上最严格的集合相等指标；
+- `nominal`：condition 出现在合法 relation slot；
+- `branch`：联合 neutralize condition 的相关 occurrences 后，对 `O` 的 Jaccard 降低；
+- `non-root`：branch-supported 且相关 occurrences 都位于可识别的 branch operator 下；
+- `parse / EOS`：生成格式健康度；
+- `mean unique AST`：每个 prompt 的候选集合中，成功解析的不同 AST 数均值。
+
+正式程序为了冻结选择规则，在没有 exact candidate 时使用三个集合指标的等权平均作为内部排序分数；P1 的
+原始 gate 也按这一预注册分数判定。本文保留这项历史合同，但结果表、增量和结论不再用该平均值概括。
+
+本轮没有把 pattern accuracy 或 SMATCH 作为主指标，因为同一个 `O` 允许存在多个正确 hypothesis；候选可能与
+数据中的 reference AST/pattern 不同，却仍精确执行回 `O` 并支持指定 condition。选择器也被禁止读取 reference
+hypothesis。pattern accuracy/SMATCH 可以作为后续的 reference-relative 辅助诊断，但不能代替这里的执行语义
+和控制指标。
 
 正式冻结值：
 
@@ -79,35 +108,81 @@ python -m akgr.reproduction.verifier_best_of_n p1 \
 
 ### 3.1 Original validation（1,664 条，observable valid graph）
 
-| decode | SemAvg | exact | nominal | branch | non-root | parse | EOS | mean unique AST |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| greedy | 0.70874 | 0.26262 | 0.67368 | 0.50541 | 0.30288 | 0.99880 | 1.00000 | 0.99880 |
-| sample K=1 | 0.66162 | 0.24459 | 0.66106 | 0.46214 | 0.28185 | 0.99940 | 1.00000 | 0.99940 |
-| sample K=2 | 0.73937 | 0.29147 | 0.66947 | 0.52524 | 0.31971 | 1.00000 | 1.00000 | 1.68329 |
-| **sample K=4** | **0.79618** | **0.34796** | **0.68209** | **0.57272** | **0.34075** | **1.00000** | **1.00000** | **2.80469** |
-| sample K=8 | 0.83377 | 0.39543 | 0.70673 | 0.61719 | 0.37500 | 1.00000 | 1.00000 | 4.68750 |
+执行语义：
 
-K=4 累积 generation+verification wall time 为 `34.84s`，执行 `11,081` 次 graph executions，平均每个
-candidate `6.48468` generation tokens。K=8 相应为 `69.84s`、`22,166` 次和 `6.48678` tokens。
+| decode | Jaccard | Dice | Overlap | exact |
+|---|---:|---:|---:|---:|
+| greedy | 0.63668 | 0.69992 | 0.78963 | 0.26262 |
+| sample K=1 | 0.59338 | 0.65319 | 0.73829 | 0.24459 |
+| sample K=2 | 0.66793 | 0.73035 | 0.81984 | 0.29147 |
+| **sample K=4** | **0.72530** | **0.78587** | **0.87736** | **0.34796** |
+| sample K=8 | 0.76458 | 0.82315 | 0.91358 | 0.39543 |
+
+K=4 相对 greedy 的 Jaccard / Dice / Overlap 增量分别为
+`+0.08862 / +0.08595 / +0.08773`，exact 增量为 `+0.08534`。三个集合指标方向一致，不是由其中某一个
+宽松指标单独驱动。
+
+控制与生成健康度：
+
+| decode | nominal | branch | non-root | parse | EOS | mean unique AST |
+|---|---:|---:|---:|---:|---:|---:|
+| greedy | 0.67368 | 0.50541 | 0.30288 | 0.99880 | 1.00000 | 0.99880 |
+| sample K=1 | 0.66106 | 0.46214 | 0.28185 | 0.99940 | 1.00000 | 0.99940 |
+| sample K=2 | 0.66947 | 0.52524 | 0.31971 | 1.00000 | 1.00000 | 1.68329 |
+| **sample K=4** | **0.68209** | **0.57272** | **0.34075** | **1.00000** | **1.00000** | **2.80469** |
+| sample K=8 | 0.70673 | 0.61719 | 0.37500 | 1.00000 | 1.00000 | 4.68750 |
+
+实际成本：
+
+| decode | wall time (s) | graph executions | generated sequences | mean generation tokens / candidate |
+|---|---:|---:|---:|---:|
+| greedy | 8.84 | 2,783 | 1,664 | 6.54988 |
+| sample K=1 | 8.27 | 2,763 | 1,664 | 6.45793 |
+| sample K=2 | 17.69 | 5,551 | 3,328 | 6.47446 |
+| **sample K=4** | **34.84** | **11,081** | **6,656** | **6.48468** |
+| sample K=8 | 69.84 | 22,166 | 13,312 | 6.48678 |
 
 ### 3.2 Pair validation（1,005 pairs / 2,010 directional prompts，observable train graph）
 
-| decode | SemAvg | exact | nominal | branch | non-root | parse | EOS | bilateral exact AST switch | condition-only switch |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| greedy | 0.98684 | 0.96816 | 0.59104 | 0.52786 | 0.40100 | 0.99900 | 1.00000 | 0.23582 | 0.14229 |
-| sample K=1 | 0.94833 | 0.91194 | 0.55124 | 0.46766 | 0.34478 | 0.99701 | 1.00000 | 0.46368 | 0.13035 |
-| sample K=2 | 0.99319 | 0.97910 | 0.68557 | 0.63134 | 0.47413 | 0.99851 | 1.00000 | 0.56020 | 0.30149 |
-| **sample K=4** | **0.99733** | **0.98905** | **0.81095** | **0.76468** | **0.58706** | **0.99900** | **1.00000** | **0.66667** | **0.48756** |
-| sample K=8 | 0.99960 | 0.99701 | 0.88358 | 0.85771 | 0.65871 | 1.00000 | 1.00000 | 0.77413 | 0.61990 |
+执行语义：
 
-K=4 wall time 为 `40.80s`，执行 `12,508` 次 graph executions，平均每个 candidate `6.94341`
-generation tokens。K=8 相应为 `82.52s`、`25,068` 次和 `6.94502` tokens。
+| decode | Jaccard | Dice | Overlap | exact |
+|---|---:|---:|---:|---:|
+| greedy | 0.98422 | 0.98669 | 0.98961 | 0.96816 |
+| sample K=1 | 0.94128 | 0.94694 | 0.95678 | 0.91194 |
+| sample K=2 | 0.99092 | 0.99279 | 0.99587 | 0.97910 |
+| **sample K=4** | **0.99635** | **0.99718** | **0.99846** | **0.98905** |
+| sample K=8 | 0.99927 | 0.99954 | 0.99999 | 0.99701 |
+
+K=4 相对 greedy 的 Jaccard / Dice / Overlap 增量分别为
+`+0.01213 / +0.01049 / +0.00885`，exact 增量为 `+0.02090`。pair validation 的 greedy 语义已经很高，
+因此绝对提升小于 original validation。
+
+控制、切换行为与生成健康度：
+
+| decode | nominal | branch | non-root | parse | EOS | bilateral exact AST switch | condition-only switch |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| greedy | 0.59104 | 0.52786 | 0.40100 | 0.99900 | 1.00000 | 0.23582 | 0.14229 |
+| sample K=1 | 0.55124 | 0.46766 | 0.34478 | 0.99701 | 1.00000 | 0.46368 | 0.13035 |
+| sample K=2 | 0.68557 | 0.63134 | 0.47413 | 0.99851 | 1.00000 | 0.56020 | 0.30149 |
+| **sample K=4** | **0.81095** | **0.76468** | **0.58706** | **0.99900** | **1.00000** | **0.66667** | **0.48756** |
+| sample K=8 | 0.88358 | 0.85771 | 0.65871 | 1.00000 | 1.00000 | 0.77413 | 0.61990 |
+
+候选多样性与实际成本：
+
+| decode | mean unique AST | wall time (s) | graph executions | generated sequences | mean generation tokens / candidate |
+|---|---:|---:|---:|---:|---:|
+| greedy | 0.99900 | 9.82 | 3,196 | 2,010 | 7.11990 |
+| sample K=1 | 0.99701 | 10.34 | 3,112 | 2,010 | 6.94478 |
+| sample K=2 | 1.58458 | 20.23 | 6,255 | 4,020 | 6.95970 |
+| **sample K=4** | **2.38607** | **40.80** | **12,508** | **8,040** | **6.94341** |
+| sample K=8 | 3.37512 | 82.52 | 25,068 | 16,080 | 6.94502 |
 
 ### 3.3 P1 gate
 
 | gate | 结果 |
 |---|---|
-| original SemAvg 不低于 greedy | 通过：0.79618 > 0.70874 |
+| original 执行语义不低于 greedy | 通过：Jaccard `0.72530 > 0.63668`；Dice `0.78587 > 0.69992`；Overlap `0.87736 > 0.78963`；正式程序按三者等权平均执行预注册判定 |
 | original branch 不低于 greedy | 通过：0.57272 > 0.50541 |
 | pair bilateral exact AST switch >= 0.66766 - 0.01 | 通过：0.66667 >= 0.65766 |
 | original parse/EOS >= greedy - 0.005 | 通过：1.00000 / 1.00000 |
@@ -149,25 +224,49 @@ python -m akgr.reproduction.verifier_best_of_n p2 \
 
 运行时间 `42.96s`，状态 `completed`；这是本方案唯一一次 sealed evaluation，不根据结果调参或重跑。
 
-| decode | SemAvg | exact | nominal | branch | non-root | parse | EOS | mean unique AST |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| greedy | 0.69887 | 0.25240 | 0.65745 | 0.49579 | 0.29567 | 0.99880 | 1.00000 | 0.99880 |
-| sample K=1 | 0.64790 | 0.23858 | 0.66166 | 0.44892 | 0.26803 | 0.99820 | 1.00000 | 0.99820 |
-| sample K=2 | 0.73966 | 0.29748 | 0.65805 | 0.50661 | 0.29327 | 0.99940 | 1.00000 | 1.70553 |
-| **sample K=4** | **0.79915** | **0.33834** | **0.67548** | **0.55709** | **0.32692** | **1.00000** | **1.00000** | **2.88341** |
+执行语义：
 
-K=4 相对 greedy：
+| decode | Jaccard | Dice | Overlap | exact |
+|---|---:|---:|---:|---:|
+| greedy | 0.62585 | 0.68651 | 0.78425 | 0.25240 |
+| sample K=1 | 0.58133 | 0.63721 | 0.72516 | 0.23858 |
+| sample K=2 | 0.66935 | 0.72732 | 0.82231 | 0.29748 |
+| **sample K=4** | **0.72873** | **0.78671** | **0.88202** | **0.33834** |
 
-- SemAvg `+0.10028`；
-- exact `+0.08594`；
-- nominal `+0.01803`；
-- branch-supported `+0.06130`；
-- non-root branch-supported `+0.03125`；
-- parse `+0.00120`；EOS `+0.00000`。
+K=4 相对 greedy 的执行语义增量：
 
-K=4 wall time 为 `31.79s`，执行 `10,999` 次 graph executions，平均每 candidate `6.39709`
-generation tokens；greedy 为 `8.27s`、`2,756` 次和 `6.47115` tokens。质量收益伴随约 4 倍候选生成与执行
-开销，不能省略成本报告。
+- Jaccard `+0.10288`；
+- Dice `+0.10020`；
+- Overlap `+0.09776`；
+- exact `+0.08594`。
+
+三个连续集合指标的绝对增量都约为 `+0.10`，同时 exact 提高约 `8.6` 个百分点。因此 sealed 结果不是
+Overlap 这类相对宽松指标单独升高造成的；对多余答案和遗漏都敏感的 Jaccard 同样提高。
+
+控制与生成健康度：
+
+| decode | nominal | branch | non-root | parse | EOS | mean unique AST |
+|---|---:|---:|---:|---:|---:|---:|
+| greedy | 0.65745 | 0.49579 | 0.29567 | 0.99880 | 1.00000 | 0.99880 |
+| sample K=1 | 0.66166 | 0.44892 | 0.26803 | 0.99820 | 1.00000 | 0.99820 |
+| sample K=2 | 0.65805 | 0.50661 | 0.29327 | 0.99940 | 1.00000 | 1.70553 |
+| **sample K=4** | **0.67548** | **0.55709** | **0.32692** | **1.00000** | **1.00000** | **2.88341** |
+
+K=4 相对 greedy：nominal `+0.01803`、branch-supported `+0.06130`、non-root branch-supported
+`+0.03125`、parse `+0.00120`、EOS `+0.00000`。branch 的增量明显大于 nominal，说明改善不只是 relation
+token 出现在合法 slot 的频率提高。
+
+实际成本：
+
+| decode | wall time (s) | graph executions | generated sequences | mean generation tokens / candidate |
+|---|---:|---:|---:|---:|
+| greedy | 8.27 | 2,756 | 1,664 | 6.47115 |
+| sample K=1 | 8.46 | 2,762 | 1,664 | 6.39663 |
+| sample K=2 | 16.40 | 5,506 | 3,328 | 6.38251 |
+| **sample K=4** | **31.79** | **10,999** | **6,656** | **6.39709** |
+
+K=4 的 generated sequences 恰为 greedy 的 4 倍，graph executions 约为 `3.99x`，wall time 约为
+`3.84x`。质量和控制收益必须与这项 inference-time 成本同时报告。
 
 sealed input hashes：
 
@@ -195,7 +294,8 @@ P2 运行根目录：
 
 正式 P1 复现了 post-failure diagnostic 的主要方向，且全部预注册 gate 通过。唯一一次 sealed P2 进一步显示：
 冻结 generator 已包含可由 observable-graph verifier 找出的高语义受控候选，K=4 inference selection 同时提升
-SemAvg、exact、branch-supported 和 non-root branch-supported，parse/EOS 不退化。
+Jaccard、Dice、Overlap、exact、branch-supported 和 non-root branch-supported，parse/EOS 不退化。sealed
+evaluation 上三个集合指标分别提高 `+0.10288 / +0.10020 / +0.09776`，方向和量级一致。
 
 该结果支持把本改动报告为 **Verifier-guided Best-of-4 inference-time decoding improvement**。它不支持关于
 generator 参数、训练目标或 predicate necessity 的更强论断，也不消除约 4 倍 generation/execution 成本。
