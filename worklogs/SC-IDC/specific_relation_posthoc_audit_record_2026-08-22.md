@@ -2,7 +2,7 @@
 
 日期：2026-08-22
 
-最终状态：两项正式实验均完成；无历史测试集重跑，无模型更新，无事后调参。
+最终状态：两项正式实验及一个纯离线 candidate-availability 补充审计均完成；无新生成、无模型更新、无事后调参。
 
 ## 1. 结论先行
 
@@ -13,6 +13,8 @@
 3. branch-aware 相对 nominal-aware 的边际非常小：原 P2 上 branch-supported 只增加 0.00120，95% CI 下界为 0；在 edge-disjoint valid-exclusive 且 reference 非空的 609 条上，两者选择结果在所有报告指标上完全相同。
 4. condition-aware 选择并非只在 train 图上有效。冻结选择后切换到 cumulative-valid，branch-aware 相对 condition-blind selector 的 Jaccard 仍为 +0.00146，95% CI 为 [+0.00018, +0.00297]；但相对 nominal-aware 仍近似为零。
 5. valid-exclusive 是很强的图分布改变：reference denotation 与 train reference 的平均 Jaccard 仅 0.00226；609 条非空子集也只有 0.00616。因此该视角适合作为敏感性 stress test，不能直接当作同一任务上的常规泛化集。
+6. candidate availability 随 K 稳定增长。P1 中 exact+branch availability 从 K=1 的 0.16887 增至 K=4 的 0.26442、K=8 的 0.30649；generator 并非完全不会提出 functional-control candidate。
+7. proposal-selection gap 相对 likelihood 很强、相对 exact-only verifier 很弱。P1 K=4 的 440 个 exact+branch opportunities 中，likelihood 漏选 126 个，exact-semantic 只漏选 20 个；pure exact-branch 与 full verifier 的集合指标、exact、branch、nonroot 完全相同。
 
 据此，论文/方案中的创新表述应聚焦为 condition-aware verifier-guided selection。branch-supported 可以保留为可解释约束或安全 tie-break，但当前证据不支持把它单独表述为语义质量提升的主要来源。
 
@@ -269,3 +271,159 @@ smoke：
 - 中等主张：condition-aware selection 在 cumulative-valid 扩图下仍有小幅稳定收益。
 - 弱主张：branch-supported 提供可解释、单调的控制质量排序。
 - 不应主张：branch-supported 已被证明能独立提高 denotation accuracy 或带来强跨图泛化。
+
+## 7. 补充实验 C：Candidate availability 与 proposal-selection gap
+
+### 7.1 目的与输入
+
+本实验在前两项审计完成后应 reviewer risk 分析追加，并已先把口径冻结到同一 proposal 文档。它只读取已经
+存在的 nested candidate streams：
+
+- P1 original validation：n=1,664，K=1/2/4/8，作为主要 K 曲线；
+- P2 final：n=1,664，K=1/2/4 前缀，只作 post-hoc confirmation；
+- 不调用模型、不生成新 candidate、不据此修改 K 或 selector。
+
+新增 pure exact-branch selector：
+
+- exact+branch-supported > exact > Jaccard/Dice/Overlap 内部排序；
+- 不含 nominal fallback；
+- 用于和 full lexicographic verifier 严格区分。
+
+关联测试更新为 11 passed in 5.88s。正式分析使用 clean detached
+e650c8b37e6e3497c7408d4244974232556b5137。
+
+### 7.2 P1 candidate availability 主曲线
+
+单元格为 availability rate，括号内为 available records count。
+
+| K | exact | nominal | branch | nonroot | exact+nominal | exact+branch | exact+nonroot |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.24459 (407) | 0.66106 (1,100) | 0.46214 (769) | 0.28185 (469) | 0.17608 (293) | 0.16887 (281) | 0.09014 (150) |
+| 2 | 0.29147 (485) | 0.72776 (1,211) | 0.54026 (899) | 0.35577 (592) | 0.22175 (369) | 0.21334 (355) | 0.12200 (203) |
+| 4 | 0.34796 (579) | 0.77103 (1,283) | 0.60637 (1,009) | 0.41947 (698) | 0.27644 (460) | 0.26442 (440) | 0.15986 (266) |
+| 8 | 0.39543 (658) | 0.81370 (1,354) | 0.67067 (1,116) | 0.50000 (832) | 0.31971 (532) | 0.30649 (510) | 0.19952 (332) |
+
+相邻 K 的 availability 增量，paired bootstrap 95% CI：
+
+| 增量 | exact | exact+nominal | exact+branch | exact+nonroot |
+|---|---:|---:|---:|---:|
+| K2-K1 | +0.04688 [0.03666,0.05709] | +0.04567 [0.03606,0.05589] | +0.04447 [0.03486,0.05469] | +0.03185 [0.02344,0.04087] |
+| K4-K2 | +0.05649 [0.04567,0.06791] | +0.05469 [0.04447,0.06611] | +0.05108 [0.04087,0.06190] | +0.03786 [0.02885,0.04688] |
+| K8-K4 | +0.04748 [0.03786,0.05769] | +0.04327 [0.03365,0.05288] | +0.04207 [0.03305,0.05168] | +0.03966 [0.03065,0.04928] |
+
+三个区间的下界均为正。generator 的 proposal 能力随 K 稳定增长，并未在 K=4 完全饱和；但 K=8 时仍有
+69.35% records 没有任何 exact+branch candidate，这部分属于 proposal failure，selector 无法补救。
+
+### 7.3 P1 exact+branch conditional capture
+
+conditional capture 的分母是当前 K 下至少存在一个 exact+branch candidate 的 records。
+
+| selector | K=1 | K=2 | K=4 | K=8 |
+|---|---:|---:|---:|---:|
+| likelihood-only | 1.00000 | 0.83662 | 0.71364 | 0.62353 |
+| exact-semantic | 1.00000 | 0.98028 | 0.95455 | 0.93529 |
+| pure exact-branch | 1.00000 | 1.00000 | 1.00000 | 1.00000 |
+| nominal-aware | 1.00000 | 0.99437 | 0.98864 | 0.98431 |
+| full branch-aware | 1.00000 | 1.00000 | 1.00000 | 1.00000 |
+
+K 增大时 likelihood capture 明显下降，因为更多候选带来更多“已生成但 likelihood 未选”的 opportunities。
+full verifier 的 100% 是规则构造结果，不是学习能力。
+
+### 7.4 P1 rescue/harm 责任分解
+
+full verifier 相对 likelihood-only：
+
+| K | exact rescue | exact+nominal rescue | exact+branch rescue | exact+nonroot rescue | harm |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 146/579 (25.22%) | 134/460 (29.13%) | 126/440 (28.64%) | 73/266 (27.44%) | 全部 0 |
+| 8 | 218/658 (33.13%) | 202/532 (37.97%) | 192/510 (37.65%) | 129/332 (38.86%) | 全部 0 |
+
+full verifier 相对 exact-semantic：
+
+| K | exact rescue | exact+nominal rescue | exact+branch rescue | exact+nonroot rescue | harm |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 0 | 18/460 (3.91%) | 20/440 (4.55%) | 13/266 (4.89%) | 全部 0 |
+| 8 | 0 | 32/532 (6.02%) | 33/510 (6.47%) | 24/332 (7.23%) | 全部 0 |
+
+结论非常明确：
+
+- 相对 model likelihood，存在强 proposal-selection gap；
+- 相对 exact-semantic verifier，剩余 functional-control gap 只有约 4.5%-6.5% available opportunities；
+- exact rescue 恒为 0，因为 exact-semantic 已经捕获所有 available exact candidate。
+
+因此大部分 denotation 提升应归因于 execution-guided exact selection，而不是 branch support。
+
+### 7.5 pure exact-branch 与 full verifier
+
+P1：
+
+| K | selector | Jaccard | Dice | Overlap | exact | nominal | branch | nonroot |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 4 | pure exact-branch | 0.72530 | 0.78587 | 0.87736 | 0.34796 | 0.68089 | 0.57272 | 0.34075 |
+| 4 | full branch-aware | 0.72530 | 0.78587 | 0.87736 | 0.34796 | 0.68209 | 0.57272 | 0.34075 |
+| 8 | pure exact-branch | 0.76458 | 0.82315 | 0.91358 | 0.39543 | 0.70373 | 0.61719 | 0.37500 |
+| 8 | full branch-aware | 0.76458 | 0.82315 | 0.91358 | 0.39543 | 0.70673 | 0.61719 | 0.37500 |
+
+full 与 pure exact-branch 的 selected index disagreement：
+
+- K=4：2/1,664，0.00120；
+- K=8：5/1,664，0.00300。
+
+两者的 Jaccard、Dice、Overlap、exact、branch、nonroot 完全相同。full rule 的 nominal fallback 只提高 nominal
+0.00120（K=4）和 0.00300（K=8），没有改变其他报告指标。
+
+### 7.6 P2 post-hoc confirmation
+
+P2 availability：
+
+| K | exact | nominal | branch | nonroot | exact+nominal | exact+branch | exact+nonroot |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.23858 | 0.66166 | 0.44892 | 0.26803 | 0.16587 | 0.14964 | 0.07512 |
+| 2 | 0.29748 | 0.71394 | 0.52344 | 0.33233 | 0.21334 | 0.19591 | 0.10577 |
+| 4 | 0.33834 | 0.75541 | 0.59375 | 0.41286 | 0.25180 | 0.23197 | 0.13882 |
+
+exact+branch availability 的增量：
+
+- K2-K1：+0.04627，95% CI [0.03666,0.05649]；
+- K4-K2：+0.03606，95% CI [0.02764,0.04507]。
+
+P2 K=4 exact+branch conditional capture：
+
+| likelihood | exact-semantic | pure exact-branch | nominal-aware | full |
+|---:|---:|---:|---:|---:|
+| 0.68653 | 0.96114 | 1.00000 | 0.99482 | 1.00000 |
+
+在 386 个 exact+branch opportunities 中：
+
+- full 相对 likelihood rescue 121 个，31.35%，harm 0；
+- full 相对 exact-semantic rescue 15 个，3.89%，harm 0。
+
+P2 K=4 pure exact-branch 与 full：
+
+| selector | Jaccard | Dice | Overlap | exact | nominal | branch | nonroot |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pure exact-branch | 0.72873 | 0.78671 | 0.88202 | 0.33834 | 0.67007 | 0.55709 | 0.32692 |
+| full branch-aware | 0.72873 | 0.78671 | 0.88202 | 0.33834 | 0.67548 | 0.55709 | 0.32692 |
+
+两者只有 9/1,664 selected indices 不同，Jaccard、Dice、Overlap、exact、branch、nonroot 仍全部相同。
+
+### 7.7 Artifact 与更新后的论文判断
+
+- 输出目录：/mnt/workspace/ctrlhgen-runs/specific-relation-candidate-availability-20260822-e650c8b
+- summary SHA256：fb0bc477c1af503cee30dadc6dd0229fc8130e2fd5e3727d561f212e7dc9fad0
+- records SHA256：26e132beb8aa5700bcb4ab9fc90f5a3e17cae09d26ebd11a1414f78d2f1386a8
+- records：3,328（P1 1,664 + P2 1,664）
+- wall time：3.49 s
+- generation/GPU：0
+
+proposal-selection gap 的故事值得保留，但必须限定 baseline：
+
+- 对 likelihood decoding：证据强，K=4/K=8 分别漏掉约 28.6%/37.6% 已 available 的 exact+branch opportunities；
+- 对 execution-guided exact verifier：证据弱，只剩约 4.5%/6.5% 的 exact+branch opportunities；
+- full lexicographic rule 与 pure exact-branch 几乎等价；
+- functional branch verification 是小幅、可解释的控制质量精修，而非主要 denotation accuracy 来源。
+
+最终推荐论文表述：
+
+> 多样本生成暴露了稳定的 proposal-selection gap；可执行 exact verification 解决主要缺口，
+> condition/branch-aware verification 在不损害 denotation quality 的前提下进一步提高 functional control。
