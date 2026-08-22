@@ -4,6 +4,7 @@ import networkx as nx
 
 from akgr.kgdata.kgclass import GraphSampler
 from akgr.reproduction.specific_relation_posthoc_audits import (
+    _qualifies,
     build_valid_exclusive_sampler,
     select_with,
 )
@@ -60,6 +61,17 @@ class SelectorAblationTests(unittest.TestCase):
             (1, "exact+branch_supported"),
         )
 
+    def test_exact_branch_omits_nominal_fallback(self):
+        candidates = [
+            _candidate(exact=True, nominal=True, logp=-2.0, sha="a"),
+            _candidate(exact=True, logp=-1.0, sha="b"),
+        ]
+        self.assertEqual(select_with("exact_branch", candidates), (1, "exact"))
+        self.assertEqual(
+            select_with("nominal_aware", candidates),
+            (0, "exact+nominal"),
+        )
+
     def test_single_signal_selectors(self):
         candidates = [
             _candidate(semantic=0.9, logp=-4.0, sha="a"),
@@ -68,6 +80,23 @@ class SelectorAblationTests(unittest.TestCase):
         self.assertEqual(select_with("semantic_only", candidates)[0], 0)
         self.assertEqual(select_with("likelihood_only", candidates)[0], 1)
         self.assertEqual(select_with("first_sample", candidates)[0], 0)
+
+    def test_joint_availability_requires_exact_and_control(self):
+        candidate = _candidate(
+            exact=False,
+            nominal=True,
+            branch=True,
+        )
+        candidate.update({
+            "parse_ok": True,
+            "nonroot_branch_supported": True,
+        })
+        self.assertTrue(_qualifies(candidate, "branch_supported"))
+        self.assertFalse(_qualifies(candidate, "exact_branch_supported"))
+        candidate["exact"] = True
+        self.assertTrue(_qualifies(candidate, "exact_nominal"))
+        self.assertTrue(_qualifies(candidate, "exact_branch_supported"))
+        self.assertTrue(_qualifies(candidate, "exact_nonroot_branch_supported"))
 
 
 class GraphViewTests(unittest.TestCase):

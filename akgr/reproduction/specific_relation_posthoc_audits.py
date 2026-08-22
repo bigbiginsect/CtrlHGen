@@ -60,6 +60,7 @@ SELECTORS = (
     "likelihood_only",
     "semantic_only",
     "exact_semantic",
+    "exact_branch",
     "nominal_aware",
     "branch_aware",
 )
@@ -196,7 +197,18 @@ def select_with(selector: str, candidates: Sequence[Mapping[str, Any]]) -> tuple
             return min(eligible, key=lambda index: _tie_key(candidates[index])), "exact"
         return min(eligible, key=semantic_key), "highest_semantic_average"
 
-    if selector == "nominal_aware":
+    if selector == "exact_branch":
+        tiers = [
+            2 if candidate["exact"] and candidate["branch_supported"]
+            else 1 if candidate["exact"] else 0
+            for candidate in candidates
+        ]
+        reasons = {
+            2: "exact+branch_supported",
+            1: "exact",
+            0: "highest_semantic_average",
+        }
+    elif selector == "nominal_aware":
         tiers = [
             2 if candidate["exact"] and candidate["nominal"]
             else 1 if candidate["exact"] else 0
@@ -382,6 +394,350 @@ def run_selector(args: argparse.Namespace) -> Path:
         _write_json(status_path, {
             "schema_version": SCHEMA_VERSION,
             "kind": "specific_relation_selector_ablation_status",
+            "status": "failed",
+            "failed_at": _utc_now(),
+            "code": code,
+            "error": type(exc).__name__ + ": " + str(exc),
+            "traceback": traceback.format_exc(),
+        })
+        raise
+
+
+AVAILABILITY_QUALITIES = (
+    "parse_ok",
+    "exact",
+    "nominal",
+    "branch_supported",
+    "nonroot_branch_supported",
+    "exact_nominal",
+    "exact_branch_supported",
+    "exact_nonroot_branch_supported",
+)
+
+
+def _qualifies(candidate: Mapping[str, Any], quality: str) -> bool:
+    if quality in {
+        "parse_ok",
+        "exact",
+        "nominal",
+        "branch_supported",
+        "nonroot_branch_supported",
+    }:
+        return bool(candidate[quality])
+    if quality == "exact_nominal":
+        return bool(candidate["exact"] and candidate["nominal"])
+    if quality == "exact_branch_supported":
+        return bool(candidate["exact"] and candidate["branch_supported"])
+    if quality == "exact_nonroot_branch_supported":
+        return bool(candidate["exact"] and candidate["nonroot_branch_supported"])
+    raise ValueError("Unknown availability quality: " + quality)
+
+
+def _prefix_selected(row: Mapping[str, Any], selector: str, k: int):
+    candidates = row["sample_candidates"][: int(k)]
+    index, reason = select_with(selector, candidates)
+    return index, reason, candidates[index]
+
+
+def _bootstrap_binary_delta(left: Sequence[bool], right: Sequence[bool]):
+    values = np.asarray(right, dtype=np.float64) - np.asarray(left, dtype=np.float64)
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    samples = np.empty(BOOTSTRAP_REPLICATES, dtype=np.float64)
+    for start in range(0, BOOTSTRAP_REPLICATES, 250):
+        stop = min(start + 250, BOOTSTRAP_REPLICATES)
+        indices = rng.integers(0, len(values), size=(stop - start, len(values)))
+        samples[start:stop] = values[indices].mean(axis=1)
+    return {
+        "mean_delta": float(values.mean()),
+        "ci95_percentile": [
+            float(np.quantile(samples, 0.025)),
+            float(np.quantile(samples, 0.975)),
+        ],
+        "gain_rate": float(np.mean(values > 0)),
+        "unchanged_rate": float(np.mean(values == 0)),
+        "loss_rate": float(np.mean(values < 0)),
+        "bootstrap_seed": BOOTSTRAP_SEED,
+        "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+    }
+
+
+def _availability_dataset(rows: Sequence[Mapping[str, Any]], k_values: Sequence[int]):
+    result: dict[str, Any] = {
+        "count": len(rows),
+        "k_values": list(k_values),
+        "availability": {},
+        "selectors": {},
+        "full_verifier_rescue_harm": {},
+        "selector_disagreement": {},
+    }
+    availability_vectors: dict[int, dict[str, list[bool]]] = {}
+    for k in k_values:
+        availability_vectors[k] = {
+            quality: [
+                any(_qualifies(candidate, quality) for candidate in row["sample_candidates"][:k])
+                for row in rows
+            ]
+            for quality in AVAILABILITY_QUALITIES
+        }
+        result["availability"][f"k{k}"] = {}
+        for quality in AVAILABILITY_QUALITIES:
+            available = availability_vectors[k][quality]
+            counts = [
+                sum(
+                    _qualifies(candidate, quality)
+                    for candidate in row["sample_candidates"][:k]
+                )
+                for row in rows
+            ]
+            result["availability"][f"k{k}"][quality] = {
+                "available_count": int(sum(available)),
+                "availability_rate": mean([float(value) for value in available]),
+                "proposal_failure_count": int(len(rows) - sum(available)),
+                "proposal_failure_rate": mean([float(not value) for value in available]),
+                "mean_qualifying_candidate_count": mean([float(value) for value in counts]),
+            }
+    result["availability_adjacent_k_deltas"] = {}
+    for left_k, right_k in zip(k_values, k_values[1:]):
+        result["availability_adjacent_k_deltas"][f"k{right_k}_minus_k{left_k}"] = {
+            quality: _bootstrap_binary_delta(
+                availability_vectors[left_k][quality],
+                availability_vectors[right_k][quality],
+            )
+            for quality in AVAILABILITY_QUALITIES
+        }
+
+    selected_cache: dict[tuple[int, str], list[tuple[int, Mapping[str, Any]]]] = {}
+    for k in k_values:
+        result["selectors"][f"k{k}"] = {}
+        for selector in SELECTORS:
+            selected = []
+            reasons: dict[str, int] = {}
+            for row in rows:
+                index, reason, candidate = _prefix_selected(row, selector, k)
+                selected.append((index, candidate))
+                reasons[reason] = reasons.get(reason, 0) + 1
+            selected_cache[(k, selector)] = selected
+            metric_summary = {}
+            for metric in METRICS:
+                key = metric if metric in {"jaccard", "dice", "overlap"} else metric + "_rate"
+                metric_summary[key] = mean([
+                    float(candidate[metric]) for _, candidate in selected
+                ])
+            captures = {}
+            for quality in AVAILABILITY_QUALITIES:
+                available = availability_vectors[k][quality]
+                selected_qualifying = [
+                    _qualifies(candidate, quality) for _, candidate in selected
+                ]
+                available_count = int(sum(available))
+                captured_count = sum(
+                    bool(is_available and is_selected)
+                    for is_available, is_selected in zip(available, selected_qualifying)
+                )
+                captures[quality] = {
+                    "selected_qualifying_count": int(sum(selected_qualifying)),
+                    "selected_qualifying_rate": mean([
+                        float(value) for value in selected_qualifying
+                    ]),
+                    "captured_available_count": int(captured_count),
+                    "conditional_capture_rate": (
+                        float(captured_count) / available_count
+                        if available_count else None
+                    ),
+                    "missed_available_count": int(available_count - captured_count),
+                }
+            result["selectors"][f"k{k}"][selector] = {
+                "metrics": metric_summary,
+                "captures": captures,
+                "selection_reasons": reasons,
+            }
+
+        full = selected_cache[(k, "branch_aware")]
+        for baseline in ("likelihood_only", "exact_semantic"):
+            baseline_selected = selected_cache[(k, baseline)]
+            comparison = {}
+            for quality in AVAILABILITY_QUALITIES:
+                available = availability_vectors[k][quality]
+                full_values = [
+                    _qualifies(candidate, quality) for _, candidate in full
+                ]
+                baseline_values = [
+                    _qualifies(candidate, quality) for _, candidate in baseline_selected
+                ]
+                rescue = [
+                    a and f and not b
+                    for a, f, b in zip(available, full_values, baseline_values)
+                ]
+                harm = [
+                    a and b and not f
+                    for a, f, b in zip(available, full_values, baseline_values)
+                ]
+                available_count = int(sum(available))
+                comparison[quality] = {
+                    "rescue_count": int(sum(rescue)),
+                    "rescue_rate": mean([float(value) for value in rescue]),
+                    "rescue_rate_given_available": (
+                        float(sum(rescue)) / available_count if available_count else None
+                    ),
+                    "harm_count": int(sum(harm)),
+                    "harm_rate": mean([float(value) for value in harm]),
+                    "harm_rate_given_available": (
+                        float(sum(harm)) / available_count if available_count else None
+                    ),
+                }
+            result["full_verifier_rescue_harm"].setdefault(f"k{k}", {})[
+                "branch_aware_vs_" + baseline
+            ] = comparison
+
+        for left, right in (
+            ("branch_aware", "exact_branch"),
+            ("branch_aware", "nominal_aware"),
+            ("branch_aware", "exact_semantic"),
+            ("branch_aware", "likelihood_only"),
+        ):
+            left_indices = [index for index, _ in selected_cache[(k, left)]]
+            right_indices = [index for index, _ in selected_cache[(k, right)]]
+            disagreements = [
+                left_index != right_index
+                for left_index, right_index in zip(left_indices, right_indices)
+            ]
+            result["selector_disagreement"].setdefault(f"k{k}", {})[
+                left + "_vs_" + right
+            ] = {
+                "count": int(sum(disagreements)),
+                "rate": mean([float(value) for value in disagreements]),
+            }
+    return result
+
+
+def _compact_availability_records(
+    dataset: str,
+    rows: Sequence[Mapping[str, Any]],
+    k_values: Sequence[int],
+):
+    for row in rows:
+        prefixes = {}
+        for k in k_values:
+            prefixes[f"k{k}"] = {
+                "availability": {
+                    quality: any(
+                        _qualifies(candidate, quality)
+                        for candidate in row["sample_candidates"][:k]
+                    )
+                    for quality in AVAILABILITY_QUALITIES
+                },
+                "qualifying_candidate_counts": {
+                    quality: sum(
+                        _qualifies(candidate, quality)
+                        for candidate in row["sample_candidates"][:k]
+                    )
+                    for quality in AVAILABILITY_QUALITIES
+                },
+                "selections": {
+                    selector: {
+                        "selected_index": _prefix_selected(row, selector, k)[0],
+                        "selection_reason": _prefix_selected(row, selector, k)[1],
+                    }
+                    for selector in SELECTORS
+                },
+            }
+        yield {
+            "dataset": dataset,
+            "record_id": str(row["record_id"]),
+            "prefixes": prefixes,
+        }
+
+
+def _p1_original_from_p2(p2: Mapping[str, Any]):
+    p1_path = Path(str(p2["p1"]["path"])).expanduser().resolve()
+    if sha256_file(p1_path) != str(p2["p1"]["sha256"]):
+        raise ValueError("P1 summary hash differs from P2 contract")
+    p1 = _read_json(p1_path)
+    if p1.get("kind") != "verifier_best_of_n_p1" or p1.get("status") != "passed":
+        raise ValueError("P2 does not reference a passed P1")
+    artifact = p1["artifacts"]["original_validation_records"]
+    records_path = (p1_path.parent / str(artifact["path"])).resolve()
+    if sha256_file(records_path) != str(artifact["sha256"]):
+        raise ValueError("P1 original-validation record hash mismatch")
+    rows = _read_jsonl(records_path)
+    if len(rows) != int(artifact["count"]):
+        raise ValueError("P1 original-validation record count mismatch")
+    if any(len(row.get("sample_candidates", [])) != 8 for row in rows):
+        raise ValueError("P1 original-validation rows must contain K=8 candidates")
+    return p1_path, records_path, rows
+
+
+def run_availability(args: argparse.Namespace) -> Path:
+    code = _git_state()
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    status_path = _prepare_output(output_dir, "specific_relation_candidate_availability", code)
+    try:
+        started = time.perf_counter()
+        p2_path = Path(args.p2_summary).expanduser().resolve()
+        p2, p2_records_path, p2_rows = _verify_p2(p2_path)
+        p1_path, p1_records_path, p1_rows = _p1_original_from_p2(p2)
+        p1_k, p2_k = (1, 2, 4, 8), (1, 2, 4)
+        compact_rows = [
+            *_compact_availability_records("p1_original_validation", p1_rows, p1_k),
+            *_compact_availability_records("p2_final_posthoc", p2_rows, p2_k),
+        ]
+        artifact = _write_jsonl(
+            output_dir / "candidate-availability-records.jsonl",
+            compact_rows,
+        )
+        report = {
+            "schema_version": SCHEMA_VERSION,
+            "implementation_version": IMPLEMENTATION_VERSION,
+            "kind": "specific_relation_candidate_availability",
+            "status": "completed",
+            "completed_at": _utc_now(),
+            "code": code,
+            "command": [sys.executable, "-m", __name__, "availability", *sys.argv[2:]],
+            "method": {
+                "offline_only": True,
+                "generation_performed": False,
+                "post_hoc_diagnostic_only": True,
+                "p1_is_primary_k_curve": True,
+                "p2_is_post_hoc_confirmation": True,
+                "k_selection_or_tuning_permitted": False,
+                "qualities": list(AVAILABILITY_QUALITIES),
+                "selectors": list(SELECTORS),
+                "bootstrap_seed": BOOTSTRAP_SEED,
+                "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+            },
+            "inputs": {
+                "p1_summary": str(p1_path),
+                "p1_summary_sha256": sha256_file(p1_path),
+                "p1_records": str(p1_records_path),
+                "p1_records_sha256": sha256_file(p1_records_path),
+                "p2_summary": str(p2_path),
+                "p2_summary_sha256": sha256_file(p2_path),
+                "p2_records": str(p2_records_path),
+                "p2_records_sha256": sha256_file(p2_records_path),
+            },
+            "datasets": {
+                "p1_original_validation": _availability_dataset(p1_rows, p1_k),
+                "p2_final_posthoc": _availability_dataset(p2_rows, p2_k),
+            },
+            "artifact": artifact,
+            "total_wall_seconds": time.perf_counter() - started,
+            "post_evaluation_tuning_permitted": False,
+        }
+        report_path = output_dir / "summary.json"
+        _write_json(report_path, report)
+        _write_json(status_path, {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "specific_relation_candidate_availability_status",
+            "status": "completed",
+            "completed_at": _utc_now(),
+            "code": code,
+            "summary_sha256": sha256_file(report_path),
+        })
+        return report_path
+    except BaseException as exc:
+        _write_json(status_path, {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "specific_relation_candidate_availability_status",
             "status": "failed",
             "failed_at": _utc_now(),
             "code": code,
@@ -714,6 +1070,9 @@ def build_parser() -> argparse.ArgumentParser:
     selector = subparsers.add_parser("selector")
     selector.add_argument("--p2-summary", required=True)
     selector.add_argument("--output-dir", required=True)
+    availability = subparsers.add_parser("availability")
+    availability.add_argument("--p2-summary", required=True)
+    availability.add_argument("--output-dir", required=True)
     graph = subparsers.add_parser("graph-audit")
     graph.add_argument("--p2-summary", required=True)
     graph.add_argument("--output-dir", required=True)
@@ -728,7 +1087,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("batch size must be positive")
     if getattr(args, "limit", None) is not None and args.limit <= 0:
         raise ValueError("limit must be positive")
-    result = run_selector(args) if args.stage == "selector" else run_graph_audit(args)
+    if args.stage == "selector":
+        result = run_selector(args)
+    elif args.stage == "availability":
+        result = run_availability(args)
+    else:
+        result = run_graph_audit(args)
     print(result)
     return 0
 

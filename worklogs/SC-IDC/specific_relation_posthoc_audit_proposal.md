@@ -68,3 +68,38 @@ valid-exclusive 很稀疏，两个空集合可能产生表面 exact。因此同�
 - valid-exclusive 稳定性下降只能说明图视角敏感，不能单独证明模型过拟合。
 - 稳定性较好也不是全图逻辑等价证明。
 - 任何后续方法修改都必须另开新 proposal 和新 final-evaluation，而不能回写当前 P2。
+
+## 7. 2026-08-22 执行后补充审计冻结
+
+在不修改上述实验和结论的前提下，补做一个纯离线 candidate-availability audit，用于回答
+generator proposal 与 selector capture 的责任分解。该补充不生成新 candidate，不重新打开其他数据，也
+不用于重新选择 K 或方法。
+
+输入仍由同一个 P2 summary 固定：
+
+- P1 original validation records 使用嵌套 K=1/2/4/8；
+- P2 final-evaluation records 使用同一 K=4 candidate stream 的 K=1/2/4 前缀；
+- P1 是主要 availability-vs-K 曲线，P2 仅作 post-hoc confirmation。
+
+新增 pure exact-branch selector：
+
+- exact+branch-supported > exact > semantic；
+- 它不含 nominal fallback，用于和 full lexicographic verifier 严格区分。
+
+对每个 K 报告以下 candidate availability、proposal-failure、平均 qualifying candidate count：
+
+- parse-ok、exact、nominal、branch-supported、nonroot-branch-supported；
+- exact+nominal、exact+branch-supported、exact+nonroot-branch-supported。
+
+对 first-sample、likelihood-only、semantic-only、exact-semantic、pure exact-branch、
+nominal-aware、full branch-aware 分别报告：
+
+- selected qualifying rate；
+- 条件 capture rate，即 qualifying candidate 存在时 selector 选中 qualifying candidate 的比例；
+- full verifier 相对 likelihood-only 和 exact-semantic 的 rescue/harm rate；
+- selector disagreement rate；
+- 所选 candidate 的 Jaccard、Dice、Overlap、exact、nominal、branch、nonroot、parse、EOS。
+
+availability 的相邻 K 增量采用 paired bootstrap，seed 271828、10,000 次 percentile 95% CI。full verifier
+对 exact+branch 的 capture 是规则构造结果，不能表述成学习能力；应主要解释 availability、baseline miss
+和 rescue 数量。
